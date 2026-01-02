@@ -1,0 +1,83 @@
+{
+    "steps": [
+        {
+            "title": "first step",
+            "description": "This is the first step of the script.",
+            "content": [
+                {
+                    "type": "text",
+                    "value": "Welcome to the first step of the script."
+                },
+                {
+                    "type": "image",
+                    "file": "welcome_image.jpg",
+                    "caption": ""
+                }
+            ]
+        },
+        {
+            "title": "second step",
+            "description": "Now lets test all message types",
+            "content": [
+                {
+                    "type": "text",
+                    "value": "This is test message with all types."
+                },
+                {
+                    "type": "image",
+                    "file": "photo.jpg",
+                    "caption": "Test Image"
+                },
+                {
+                    "type": "video",
+                    "file": "video.mp4",
+                    "caption": "Test Video"
+                },
+                {
+                    "type": "audio",
+                    "file": "audio.mp3",
+                    "caption": "Test Audio"
+                },
+                {
+                    "type": "document",
+                    "file": "doc.pdf",
+                    "caption": "Test Document"
+                },
+                {
+                    "type": "voice",
+                    "file": "voice.ogg",
+                    "caption": "Test Voice Message"
+                },
+                {
+                    "type": "video note",
+                    "file": "video_note.mp4",
+                    "caption": "Test Video Note"
+                }
+            ]
+        },
+        {
+            "title": "final step",
+            "description": "This is the final step of the script.",
+            "content": [
+                {
+                    "type": "text",
+                    "value": "You have reached the final step of the script."
+                },
+                {
+                    "type": "image",
+                    "file": "final_image.jpg",
+                    "caption": "Final Image"
+                }
+            ]
+        }
+    ],
+    "welcome_message": "Доступ к этому курсу стоит 100 000 000 рублей. Оплатите, чтобы продолжить.",
+    "next_step_message": "Proceeding to the next step...",
+    "completion_message": "You have completed the script. Thank you!",
+    "next_step_delay": {
+        "type": "period",
+        "value": 30
+    },
+    "support_contact": "@boldmarch",
+    "create_payed_users": true
+}
