@@ -206,4 +206,8 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+<<<<<<< HEAD
 *.db
+=======
+.db
+>>>>>>> 7e18b7c3d56bf83fc472da5a23296975914c2e7d
