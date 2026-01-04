@@ -1,4 +1,6 @@
-from math import log
+from math import asin, log
+from turtle import title
+from typing import Any
 from sqlmodel import SQLModel, create_engine, Field, Session, select
 from sqlalchemy import BigInteger
 from dotenv import load_dotenv
@@ -23,6 +25,7 @@ from kassa import create_payment, get_payment_status
 from time import time
 
 import bot_messages as bms
+from datetime import datetime
 
 logging.basicConfig(
     filename="bot.log",
@@ -40,6 +43,7 @@ class User(SQLModel, table=True):
     payed: bool = Field(default=False)
     step_sent_time: float = Field(default=0.0)
     next_step_invite_sent: bool = Field(default=False)
+    upload_mode: bool = Field(default=False)
 
 
 load_dotenv()
@@ -58,7 +62,8 @@ if bot_key is None:
     raise ValueError("BOT_KEY environment variable not set")
 
 engine = create_engine(db_url)
-script: dict = json.load(open(script_path, "r", encoding="utf-8"))
+script: list[dict] = json.load(open(script_path, "r", encoding="utf-8"))
+settings: dict[str, Any] = json.load(open("settings.json", "r", encoding="utf-8"))
 bot = Bot(token=bot_key)
 dp = Dispatcher()
 
@@ -66,17 +71,17 @@ dp = Dispatcher()
 @dp.message(CommandStart())
 async def start_command_handler(message: Message):
     if message.from_user:
-        logger.info(f"User {message.from_user.id} started the bot")
+        logger.info(bms.on_start_command.format(id=message.from_user.id))
         with Session(engine) as session:
             user = session.get(User, message.from_user.id)
             if not user:
                 user = User(id=message.from_user.id)
-                user.payed = script.get("create_payed_users", False)
+                user.payed = settings["create_paid_users"]
                 session.add(user)
                 session.commit()
-                logger.info(f"Created new user with id {user.id}")
+                logger.info(bms.user_created.format(id=user.id))
             else:
-                logger.info(f"User {user.id} already exists")
+                logger.info(bms.user_exists.format(id=user.id))
             if not user.payed:
                 payment_id, confirmation_url = create_payment()
                 user.payment_key = payment_id
@@ -87,130 +92,165 @@ async def start_command_handler(message: Message):
                     inline_keyboard=[
                         [
                             InlineKeyboardButton(
-                                text="Complete Payment", url=confirmation_url
+                                text=settings["messages"]["pay_button_text"],
+                                url=confirmation_url,
                             )
                         ]
                     ]
                 )
                 await message.answer(
-                    script.get("welcome_message", ""),
+                    settings["messages"]["welcome_message"],
                     reply_markup=keyboard,
                 )
-                logger.info(f"Sent payment link to user {user.id}")
+                logger.info(bms.pay_link_sent.format(id=user.id))
             else:
-                await message.answer(
-                    "У вас уже есть доступ к боту. Добро пожаловать обратно!"
-                )
-                logger.info(
-                    f"User {user.id} has already paid, sent welcome back message"
-                )
+                await message.answer(settings["messages"]["already_registered"])
+                logger.info(bms.wlc_back.format(id=user.id))
     else:
-        logger.warning("Received /start command from unknown user")
+        logger.warning(bms.no_user_id)
+
+
+@dp.message(Command("upload"))
+async def upload_command(message: Message):
+    user_id = message.from_user.id if message.from_user else None
+    if user_id:
+        with Session(engine) as session:
+            user = session.get(User, user_id)
+            if user:
+                user.upload_mode = not user.upload_mode
+                session.commit()
+                await message.answer(
+                    bms.upload_mode.format(
+                        state="enabled" if user.upload_mode else "disabled."
+                    )
+                )
+            else:
+                await message.answer(settings["messages"]["not_registered"])
+                logger.info(bms.not_registered.format(id=user_id))
 
 
 @dp.callback_query(F.data == "get_step")
 async def get_step_command_handler(callback_query: CallbackQuery):
     if callback_query.from_user:
         user_id = callback_query.from_user.id
-        logger.info(f"User {user_id} requested next step")
+        logger.info(bms.next_request.format(id=user_id))
         with Session(engine) as session:
             user = session.get(User, user_id)
             if not user:
-                await bot.send_message(user_id, bms.not_registered[0])
-                logger.info(bms.not_registered[1].format(id=user_id))
+                await bot.send_message(user_id, settings["messages"]["not_registered"])
+                logger.info(bms.not_registered.format(id=user_id))
                 return
             if not user.payed:
-                await bot.send_message(user_id, bms.not_payed[0])
-                logger.info(bms.not_payed[1].format(id=user_id))
+                await bot.send_message(user_id, settings["messages"]["not_payed"])
+                logger.info(bms.not_payed.format(id=user_id))
                 return
             if user.step_sent_time:
-                await bot.send_message(user_id, bms.step_sent[0])
-                logger.info(bms.step_sent[1].format(id=user_id))
+                await bot.send_message(user_id, settings["messages"]["step_sent"])
+                logger.info(bms.step_sent.format(id=user_id))
                 return
-            if user.current_step >= len(script["steps"]):
-                await bot.send_message(user_id, bms.script_completed[0])
-                logger.info(bms.script_completed[1].format(id=user_id))
+            if user.current_step >= len(script):
+                await bot.send_message(
+                    user_id, settings["messages"]["script_completed"]
+                )
+                logger.info(bms.script_completed.format(id=user_id))
                 return
-            callback_query.answer()
-            for payload in script["steps"][user.current_step]["content"]:
-                payload: dict
+
+            for content in script[user.current_step]["content"]:
                 try:
-                    if payload["type"] == "text":
-                        await bot.send_message(user_id, payload["value"])
+                    if content["type"] == "text":
+                        await bot.send_message(user_id, content["value"])
                     else:
-                        
-                        file = FSInputFile(uploads_dir + payload["file"])
-                        caption = payload.get("caption", None)
-                        if payload["type"] == "image":
-                            await bot.send_photo(user_id, file, caption=caption)
-                        if payload["type"] == "video":
-                            await bot.send_video(user_id, file, caption=caption)
-                        if payload["type"] == "audio":
-                            await bot.send_audio(user_id, file, caption=caption)
-                        if payload["type"] == "voice":
-                            await bot.send_voice(user_id, file, caption=caption)
-                        if payload["type"] == "video note":
-                            await bot.send_video_note(user_id, file)
-                        if payload["type"] == "document":
-                            await bot.send_document(user_id, file, caption=caption)
+                        file_id = content["file_id"]
+                        if file_id:
+                            caption = content["caption"]
+                            if content["type"] == "photo":
+                                await bot.send_photo(user_id, file_id, caption=caption, protect_content=True)
+                            if content["type"] == "video":
+                                await bot.send_video(user_id, file_id, caption=caption, protect_content=True)
+                            if content["type"] == "audio":
+                                await bot.send_audio(user_id, file_id, caption=caption, protect_content=True)
+                            if content["type"] == "voice":
+                                await bot.send_voice(user_id, file_id, caption=caption, protect_content=True)
+                            if content["type"] == "video note":
+                                await bot.send_video_note(user_id, file_id, protect_content=True)
+                            if content["type"] == "document":
+                                await bot.send_document(
+                                    user_id, file_id, caption=caption
+                                )
                 except Exception as e:
                     logger.error(
-                        f"Failed to send {payload['type']} to user {user.id}: {e}"
+                        bms.send_fail.format(type=content["type"], id=user_id, e=e)
                     )
             user.step_sent_time = time()
             user.next_step_invite_sent = False
             session.commit()
-            logger.info(f"Sent step {user.current_step} to user {user.id}")
+            await callback_query.answer()
+            logger.info(
+                bms.step_sent_success.format(step_number=user.current_step, id=user_id)
+            )
 
 
 @dp.message()
 async def default_message_handler(message: Message):
-    id = message.from_user.id if message.from_user else "unknown"
-    logger.info(bms.on_message[1].format(id=id, text=message.text))
-    await message.answer(
-        bms.on_message[0].format(
-            support_contact=script.get("support_contact", "поддержке")
-        )
-    )
+    if message.text:
+        id = message.from_user.id if message.from_user else "unknown"
+        logger.info(bms.on_message.format(id=id, text=message.text))
+        await message.answer(settings["messages"]["on_message"])
+    else:
+        user_id = message.from_user.id if message.from_user else None
+        if user_id:
+            with Session(engine) as session:
+                user = session.get(User, user_id)
+                if user and user.upload_mode:
+                    if message.photo:
+                        texts = []
+                        for size in message.photo:
+                            texts.append(
+                                f"Size: {size.width}x{size.height}, {size.file_size/1024/1024 if size.file_size else 0:.2f} MB\n\n{size.file_id}"
+                            )
+                        await message.reply("\n\n".join(texts))
+                    if message.video:
+                        await message.reply(message.video.file_id)
+                    if message.video_note:
+                        await message.reply(message.video_note.file_id)
+                    if message.document:
+                        await message.reply(message.document.file_id)
+                    if message.audio:
+                        await message.reply(message.audio.file_id)
+                    if message.voice:
+                        await message.reply(message.voice.file_id)
 
 
 async def check_payments():
     while True:
         with Session(engine) as session:
-            users = session.exec(select(User).where(User.payment_status == "pending")).all()  # type: ignore
+            users = session.exec(
+                select(User).where(
+                    User.payment_status == "pending",
+                    User.payed == False,
+                )
+            ).all()
             if users:
                 for user in users:
-                    logger.info(
-                        f"Checking payment status for user {user.id} with payment key {user.payment_key}"
-                    )
+                    logger.info(bms.check_payment.format(id=user.id))
                     status = get_payment_status(user.payment_key)
                     if status == "succeeded":
                         user.payed = True
                         user.payment_status = "succeeded"
                         session.commit()
-                        logger.info(f"User {user.id} has completed payment.")
-                        try:
-                            await bot.send_message(
-                                chat_id=user.id,
-                                text="Спасибо за ваш платеж! Теперь у вас есть полный доступ к боту.",
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"Failed to send payment confirmation to user {user.id}: {e}"
-                            )
+                        logger.info(bms.payment_confirmed.format(id=user.id))
+                        await bot.send_message(
+                            chat_id=user.id,
+                            text=settings["messages"]["payment_successful"],
+                        )
                     elif status == "canceled":
                         user.payment_status = "canceled"
                         session.commit()
-                        logger.info(f"User {user.id} payment was canceled.")
-                        try:
-                            await bot.send_message(
-                                chat_id=user.id,
-                                text="Ваш платеж был отменен. Если вы хотите получить доступ к боту, пожалуйста, отправьте команду /start еще раз.",
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"Failed to send payment confirmation to user {user.id}: {e}"
-                            )
+                        logger.info(bms.payment_canceled.format(id=user.id))
+                        await bot.send_message(
+                            chat_id=user.id,
+                            text=settings["messages"]["payment_canceled"],
+                        )
                     await asyncio.sleep(1)  # avoid hammering the payment API
             else:
                 await asyncio.sleep(1)
@@ -219,47 +259,79 @@ async def check_payments():
 async def update_next_steps():
     while True:
         current_time = time()
+        next_step_delay = settings["next_step_delay"]
+        if next_step_delay["type"] == "Period":
+            time_threshold = current_time - next_step_delay["value"]
+        elif next_step_delay["type"] == "Fixed time":
+            start_of_day = (
+                datetime.fromtimestamp(current_time)
+                .replace(hour=0, minute=0, second=0, microsecond=0)
+                .timestamp()
+            )
+            time_threshold = start_of_day + next_step_delay["value"]
+        else:
+            raise ValueError("Invalid next_step_delay type in settings")
+
         with Session(engine) as session:
-            time_threshold = (
-                current_time - script["next_step_delay"]["value"]
-            )  # 24 hours ago
+
             users = session.exec(
                 select(User).where(
                     User.payed == True,
-                    User.current_step < len(script["steps"])-1,
-                    User.step_sent_time <= time_threshold,
+                    User.current_step < len(script),
+                    User.step_sent_time < time_threshold,
                     User.next_step_invite_sent == False,
                 )
             ).all()  # type: ignore
+
             for user in users:
                 user.current_step += 1
                 user.step_sent_time = 0.0
-                step = script["steps"][user.current_step]
-                try:
-                    kbd = InlineKeyboardMarkup(
-                        inline_keyboard=[
-                            [
-                                InlineKeyboardButton(
-                                    text=bms.next_step_button, callback_data="get_step"
-                                )
+                if user.current_step < len(script):
+                    step = script[user.current_step]
+                    try:
+                        kbd = InlineKeyboardMarkup(
+                            inline_keyboard=[
+                                [
+                                    InlineKeyboardButton(
+                                        text=settings["messages"]["next_step_button"],
+                                        callback_data="get_step",
+                                    )
+                                ]
                             ]
-                        ]
-                    )
+                        )
+                        await bot.send_message(
+                            chat_id=user.id,
+                            text=settings["messages"]["step_invite"].format(
+                                title=step["title"],
+                                description=step["description"],
+                                step_number=user.current_step+1,
+                            ),
+                            reply_markup=kbd,
+                        )
+                        logger.info(bms.step_invite.format(id=user.id))
+                        user.next_step_invite_sent = True
+                        session.commit()
+                    except Exception as e:
+                        logger.error(bms.message_failed.format(id=user.id, e=e))
+                        session.rollback()
+                else:
                     await bot.send_message(
                         chat_id=user.id,
-                        text=bms.step_invite[0].format(
-                            title=step["title"],
-                            description=step["description"],
-                        ),
-                        reply_markup=kbd,
+                        text=settings["messages"]["script_completed"],
                     )
-                    logger.info(bms.step_invite[1].format(id=user.id))
-                    user.next_step_invite_sent = True
+                    logger.info(bms.script_completed.format(id=user.id))
                     session.commit()
-                except Exception as e:
-                    logger.error(bms.massage_failed.format(id=user.id, e=e))
-                    session.rollback()
         await asyncio.sleep(1)
+
+
+async def reload_settings():
+    while True:
+        global settings
+        global script
+        settings = json.load(open("settings.json", "r", encoding="utf-8"))
+        script = json.load(open("script.json", "r", encoding="utf-8"))
+        logger.info("Settings reloaded")
+        await asyncio.sleep(10)  # reload every 10 seconds
 
 
 async def main():
@@ -269,6 +341,8 @@ async def main():
     asyncio.create_task(check_payments())
     logger.info("Starting next step update task")
     asyncio.create_task(update_next_steps())
+    logger.info("Starting settings reload task")
+    asyncio.create_task(reload_settings())
     logger.info("Starting bot polling")
     await dp.start_polling(bot)
     logger.info("Bot has stopped")
