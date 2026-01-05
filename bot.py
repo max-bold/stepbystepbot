@@ -31,7 +31,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("bot")
 
 
 class User(SQLModel, table=True):
@@ -127,7 +127,7 @@ async def upload_command(message: Message):
     if user_id:
         with Session(engine) as session:
             user = session.get(User, user_id)
-            if user:
+            if user and user.is_admin:
                 user.upload_mode = not user.upload_mode
                 session.commit()
                 await message.answer(
@@ -136,7 +136,7 @@ async def upload_command(message: Message):
                     )
                 )
             else:
-                await message.answer(settings["messages"]["not_registered"])
+                await message.answer("You are not authorized to perform this action. Only admins can use this command.")
                 logger.info(bms.not_registered.format(id=user_id))
 
 
@@ -144,7 +144,7 @@ async def upload_command(message: Message):
 async def login_command_handler(message: Message):
     if message.from_user and message.text:
         user_id = message.from_user.id
-        key = message.text.split(" ")[1]
+        key = message.text.split(" ")[-1]
         if key == getenv("ADMIN_PASSWORD"):
             with Session(engine) as session:
                 user = session.get(User, user_id)
@@ -152,13 +152,16 @@ async def login_command_handler(message: Message):
                     user.payed = True
                     user.is_admin = True
                     session.commit()
-                    await message.answer(settings["messages"]["login_successful"])
                     logger.info(bms.login_successful.format(admin_id=user_id))
                 else:
-                    await message.answer(settings["messages"]["not_registered"])
-                    logger.info(bms.not_registered.format(id=user_id))
+                    user = User(id=user_id, payed=True, is_admin=True)
+                    session.add(user)
+                    session.commit()
+                    logger.info(bms.created_admin.format(id=user_id))
+                await message.answer(settings["messages"]["login_successful"])
+                logger.info(bms.login_successful.format(admin_id=user_id))
         else:
-            await message.answer(settings["messages"]["not_admin"])
+            await message.answer("Wrong password. Send in /login <password> format")
             logger.info(bms.invalid_login.format(admin_id=user_id))
 
 

@@ -33,3 +33,4 @@ failed_send_step_to_admin = "Failed to send step {step_number} to admin {admin_i
 not_authorized = "You are not authorized to perform this action."
 step_send_error = "Error sending step {step_number} to user {id}."
 progress_reset = "User {id} progress has been reset."
+created_admin = "Created user {id} with admin rights."
