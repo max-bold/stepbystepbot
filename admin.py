@@ -1,13 +1,18 @@
 import streamlit as st
 import json
 import datetime as dt
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+admin_password = os.getenv("ADMIN_PASSWORD")
 
 if "logged_in" not in st.session_state or not st.session_state["logged_in"]:
     st.info("Please log in to access the admin panel.")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     if st.button("Log In"):
-        if username == "admin" and password == "password":
+        if username == "admin" and password == admin_password:
             st.session_state["logged_in"] = True
             st.success("Logged in successfully!")
             st.rerun()
@@ -249,6 +254,11 @@ def setings_page():
             if key == "step_invite":
                 st.caption(
                     "Available placeholders: {step_number}, {title}, {description}"
+                )
+
+            if key == "next_step_timeout":
+                st.caption(
+                    "Where {time} will be replaced with time in \"HH:MM МСК\" format"
                 )
 
     if "settings_changed" in st.session_state and st.session_state["settings_changed"]:

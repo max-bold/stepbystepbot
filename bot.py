@@ -1,4 +1,6 @@
 from math import asin, log
+from operator import is_, le
+from re import U
 from turtle import title
 from typing import Any
 from sqlmodel import SQLModel, create_engine, Field, Session, select
@@ -19,13 +21,10 @@ from aiogram.types import (
 )
 
 import logging
-
 from kassa import create_payment, get_payment_status
 
-from time import time
-
 import bot_messages as bms
-from datetime import datetime
+from datetime import datetime, timezone, timedelta, time
 
 logging.basicConfig(
     filename="bot.log",
@@ -37,13 +36,14 @@ logger = logging.getLogger(__name__)
 
 class User(SQLModel, table=True):
     id: int = Field(primary_key=True, sa_type=BigInteger)
-    current_step: int = Field(default=-1)
+    current_step: int = Field(default=0)
     payment_status: str = Field(default="")
     payment_key: str = Field(default="")
     payed: bool = Field(default=False)
     step_sent_time: float = Field(default=0.0)
     next_step_invite_sent: bool = Field(default=False)
     upload_mode: bool = Field(default=False)
+    is_admin: bool = Field(default=False)
 
 
 load_dotenv()
@@ -66,6 +66,17 @@ script: list[dict] = json.load(open(script_path, "r", encoding="utf-8"))
 settings: dict[str, Any] = json.load(open("settings.json", "r", encoding="utf-8"))
 bot = Bot(token=bot_key)
 dp = Dispatcher()
+
+
+def now() -> float:
+    """
+    Get the current time in UTC+3 timezone as a timestamp.
+
+    Returns:
+        float: Current time in UTC+3 as a Unix timestamp.
+    """
+    utc_plus_3 = timezone(timedelta(hours=3))
+    return datetime.now(utc_plus_3).timestamp()
 
 
 @dp.message(CommandStart())
@@ -129,6 +140,189 @@ async def upload_command(message: Message):
                 logger.info(bms.not_registered.format(id=user_id))
 
 
+@dp.message(Command("login"))
+async def login_command_handler(message: Message):
+    if message.from_user and message.text:
+        user_id = message.from_user.id
+        key = message.text.split(" ")[1]
+        if key == getenv("ADMIN_PASSWORD"):
+            with Session(engine) as session:
+                user = session.get(User, user_id)
+                if user:
+                    user.payed = True
+                    user.is_admin = True
+                    session.commit()
+                    await message.answer(settings["messages"]["login_successful"])
+                    logger.info(bms.login_successful.format(admin_id=user_id))
+                else:
+                    await message.answer(settings["messages"]["not_registered"])
+                    logger.info(bms.not_registered.format(id=user_id))
+        else:
+            await message.answer(settings["messages"]["not_admin"])
+            logger.info(bms.invalid_login.format(admin_id=user_id))
+
+
+@dp.message(Command("logout"))
+async def logout_command(message: Message):
+    user_id = message.from_user.id if message.from_user else None
+    if user_id:
+        with Session(engine) as session:
+            user = session.get(User, user_id)
+            if user:
+                user.is_admin = False
+                session.commit()
+                await message.answer("You have been logged out from admin mode.")
+                logger.info(bms.admin_logout.format(admin_id=user_id))
+            else:
+                await message.answer(settings["messages"]["not_registered"])
+                logger.info(bms.not_registered.format(id=user_id))
+
+
+@dp.message(Command("get_step"))
+async def get_step_message_handler(message: Message):
+    if message.from_user:
+        user_id = message.from_user.id
+        with Session(engine) as session:
+            user = session.get(User, user_id)
+            if not user:
+                await message.answer(settings["messages"]["not_registered"])
+                logger.info(bms.not_registered.format(id=user_id))
+            else:
+                if user.is_admin:
+                    row_count = len(script) // 3 + (1 if len(script) % 3 != 0 else 0)
+                    step_buttons = []
+                    row = []
+                    for i in range(row_count):
+                        for j in range(3):
+                            step_index = i * 3 + j
+                            if step_index < len(script):
+                                row.append(
+                                    InlineKeyboardButton(
+                                        text=f"{step_index+1}. {script[step_index]['title']}",
+                                        callback_data=f"admin_get_step={step_index}",
+                                    )
+                                )
+                            else:
+                                # Add empty button to fill the row
+                                row.append(
+                                    InlineKeyboardButton(
+                                        text=" ", callback_data="empty"
+                                    )
+                                )
+                        step_buttons.append(row)
+                        row = []
+                    keyboard = InlineKeyboardMarkup(inline_keyboard=step_buttons)
+                    await message.answer("Select a step:", reply_markup=keyboard)
+                else:
+                    await message.answer(settings["messages"]["not_admin"])
+                    logger.info(bms.get_step_not_admin.format(id=user_id))
+
+
+@dp.message(Command("reset"))
+async def reset_command_handler(message: Message):
+    if message.from_user:
+        user_id = message.from_user.id
+        with Session(engine) as session:
+            user = session.get(User, user_id)
+            if user:
+                user.current_step = 0
+                user.step_sent_time = 0.0
+                user.next_step_invite_sent = False
+                session.commit()
+                await message.answer(settings["messages"]["progress_reset"])
+                logger.info(bms.progress_reset.format(id=user_id))
+            else:
+                await message.answer(settings["messages"]["not_registered"])
+                logger.info(bms.not_registered.format(id=user_id))
+
+
+# /delete_me command to delete user data from database
+@dp.message(Command("delete_me"))
+async def delete_me_command_handler(message: Message):
+    if message.from_user:
+        user_id = message.from_user.id
+        with Session(engine) as session:
+            user = session.get(User, user_id)
+            if user:
+                session.delete(user)
+                session.commit()
+                await message.answer("Your data has been deleted from the database.")
+                logger.info(f"User {user_id} data deleted from database.")
+            else:
+                await message.answer(settings["messages"]["not_registered"])
+                logger.info(bms.not_registered.format(id=user_id))
+
+
+async def send_step_content(user_id: int, step_number: int) -> bool:
+    errors = False
+    for content in script[step_number]["content"]:
+        try:
+            if content["type"] == "text":
+                await bot.send_message(user_id, content["value"], protect_content=True)
+            else:
+                file_id = content["file_id"]
+                if file_id:
+                    caption = content["caption"]
+                    if content["type"] == "photo":
+                        await bot.send_photo(
+                            user_id, file_id, caption=caption, protect_content=True
+                        )
+                    if content["type"] == "video":
+                        await bot.send_video(
+                            user_id, file_id, caption=caption, protect_content=True
+                        )
+                    if content["type"] == "audio":
+                        await bot.send_audio(
+                            user_id, file_id, caption=caption, protect_content=True
+                        )
+                    if content["type"] == "voice":
+                        await bot.send_voice(
+                            user_id, file_id, caption=caption, protect_content=True
+                        )
+                    if content["type"] == "video note":
+                        await bot.send_video_note(
+                            user_id, file_id, protect_content=True
+                        )
+                    if content["type"] == "document":
+                        await bot.send_document(user_id, file_id, caption=caption)
+        except Exception as e:
+            logger.error(bms.send_fail.format(type=content["type"], id=user_id, e=e))
+            errors = True
+    return not errors
+
+
+@dp.callback_query(F.data.startswith("admin_get_step="))
+async def admin_get_step_handler(callback_query: CallbackQuery):
+    if callback_query.from_user and callback_query.data:
+        user_id = callback_query.from_user.id
+        step_number = int(callback_query.data.split("=")[1])
+        logger.info(
+            bms.get_step_menu_request.format(
+                admin_id=user_id,
+                step_number=step_number,
+            )
+        )
+        with Session(engine) as session:
+            user = session.get(User, user_id)
+            if user and user.is_admin:
+                await send_step_content(user_id, step_number)
+                await callback_query.answer()
+                logger.info(
+                    bms.sent_step_to_admin.format(
+                        admin_id=user_id, step_number=step_number
+                    )
+                )
+            else:
+                await callback_query.answer(bms.not_authorized, show_alert=True)
+    else:
+        await callback_query.answer(bms.not_authorized, show_alert=True)
+
+
+@dp.callback_query(F.data == "empty")
+async def empty_button_handler(callback_query: CallbackQuery):
+    await callback_query.answer()
+
+
 @dp.callback_query(F.data == "get_step")
 async def get_step_command_handler(callback_query: CallbackQuery):
     if callback_query.from_user:
@@ -137,57 +331,72 @@ async def get_step_command_handler(callback_query: CallbackQuery):
         with Session(engine) as session:
             user = session.get(User, user_id)
             if not user:
-                await bot.send_message(user_id, settings["messages"]["not_registered"])
+                await callback_query.answer(settings["messages"]["not_registered"])
                 logger.info(bms.not_registered.format(id=user_id))
-                return
-            if not user.payed:
-                await bot.send_message(user_id, settings["messages"]["not_payed"])
+            elif not user.payed:
+                await callback_query.answer(settings["messages"]["not_payed"])
                 logger.info(bms.not_payed.format(id=user_id))
                 return
-            if user.step_sent_time:
-                await bot.send_message(user_id, settings["messages"]["step_sent"])
+            elif user.step_sent_time:
+                await callback_query.answer(settings["messages"]["step_sent"])
                 logger.info(bms.step_sent.format(id=user_id))
+                await callback_query.answer()
                 return
-            if user.current_step >= len(script):
+            elif user.current_step >= len(script):
                 await bot.send_message(
                     user_id, settings["messages"]["script_completed"]
                 )
                 logger.info(bms.script_completed.format(id=user_id))
                 return
-
-            for content in script[user.current_step]["content"]:
-                try:
-                    if content["type"] == "text":
-                        await bot.send_message(user_id, content["value"])
+            else:
+                if await send_step_content(user_id, user.current_step):
+                    user.step_sent_time = now()
+                    user.next_step_invite_sent = False
+                    user.current_step += 1
+                    session.commit()
+                    if user.current_step >= len(script):
+                        await bot.send_message(
+                            user_id, settings["messages"]["script_completed"]
+                        )
+                        logger.info(bms.script_completed.format(id=user_id))
                     else:
-                        file_id = content["file_id"]
-                        if file_id:
-                            caption = content["caption"]
-                            if content["type"] == "photo":
-                                await bot.send_photo(user_id, file_id, caption=caption, protect_content=True)
-                            if content["type"] == "video":
-                                await bot.send_video(user_id, file_id, caption=caption, protect_content=True)
-                            if content["type"] == "audio":
-                                await bot.send_audio(user_id, file_id, caption=caption, protect_content=True)
-                            if content["type"] == "voice":
-                                await bot.send_voice(user_id, file_id, caption=caption, protect_content=True)
-                            if content["type"] == "video note":
-                                await bot.send_video_note(user_id, file_id, protect_content=True)
-                            if content["type"] == "document":
-                                await bot.send_document(
-                                    user_id, file_id, caption=caption
-                                )
-                except Exception as e:
-                    logger.error(
-                        bms.send_fail.format(type=content["type"], id=user_id, e=e)
+                        value: int = settings["next_step_delay"]["value"]
+                        if settings["next_step_delay"]["type"] == "Fixed time":
+                            hh = value // 3600
+                            mm = (value % 3600) // 60
+                            time_str = f"{hh:02}:{mm:02} МСК"
+                        elif settings["next_step_delay"]["type"] == "Period":
+                            td = timedelta(seconds=value)
+                            dt = datetime.fromtimestamp(user.step_sent_time) + td
+                            time_str = dt.strftime("%H:%M") + " МСК"
+                        else:
+                            raise ValueError("Invalid next_step_delay type")
+                        await bot.send_message(
+                            user_id,
+                            settings["messages"]["next_step_timeout"].format(
+                                time=time_str
+                            ),
+                        )
+                    await callback_query.answer()
+                    logger.info(
+                        bms.step_sent_success.format(
+                            step_number=user.current_step, id=user_id
+                        )
                     )
-            user.step_sent_time = time()
-            user.next_step_invite_sent = False
-            session.commit()
-            await callback_query.answer()
-            logger.info(
-                bms.step_sent_success.format(step_number=user.current_step, id=user_id)
-            )
+                else:
+                    await callback_query.answer(
+                        settings["messages"]["step_send_error"].format(
+                            step_number=user.current_step,
+                            id=user_id,
+                        ),
+                        show_alert=True,
+                    )
+                    logger.error(
+                        bms.step_send_error.format(
+                            step_number=user.current_step,
+                            id=user_id,
+                        )
+                    )
 
 
 @dp.message()
@@ -203,12 +412,7 @@ async def default_message_handler(message: Message):
                 user = session.get(User, user_id)
                 if user and user.upload_mode:
                     if message.photo:
-                        texts = []
-                        for size in message.photo:
-                            texts.append(
-                                f"Size: {size.width}x{size.height}, {size.file_size/1024/1024 if size.file_size else 0:.2f} MB\n\n{size.file_id}"
-                            )
-                        await message.reply("\n\n".join(texts))
+                        await message.reply(message.photo[-1].file_id)
                     if message.video:
                         await message.reply(message.video.file_id)
                     if message.video_note:
@@ -256,71 +460,104 @@ async def check_payments():
                 await asyncio.sleep(1)
 
 
+NEXT_STEP_KBD = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text=settings["messages"]["next_step_button"],
+                callback_data="get_step",
+            )
+        ]
+    ]
+)
+
+
+async def send_invite(user: User) -> bool:
+    step = script[user.current_step]
+    try:
+        await bot.send_message(
+            chat_id=user.id,
+            text=settings["messages"]["step_invite"].format(
+                title=step["title"],
+                description=step["description"],
+                step_number=user.current_step + 1,
+            ),
+            reply_markup=NEXT_STEP_KBD,
+        )
+        logger.info(bms.step_invite.format(id=user.id))
+        return True
+    except Exception as e:
+        logger.error(bms.message_failed.format(id=user.id, e=e))
+        return False
+
+
+async def send_invites(time_threshold: float):
+    with Session(engine) as session:
+        users = session.exec(
+            select(User).where(
+                User.payed == True,
+                User.current_step < len(script),
+                User.step_sent_time < time_threshold,
+                User.next_step_invite_sent == False,
+            )
+        ).all()
+        for user in users:
+            if await send_invite(user):
+                user.next_step_invite_sent = True
+                user.step_sent_time = 0.0
+                session.commit()
+
+
+async def invite_zero_steppers():
+    with Session(engine) as session:
+        users = session.exec(
+            select(User).where(
+                User.payed == True,
+                User.current_step == 0,
+                User.next_step_invite_sent == False,
+            )
+        ).all()
+        for user in users:
+            if await send_invite(user):
+                user.next_step_invite_sent = True
+                user.step_sent_time = 0.0
+                session.commit()
+
+
+async def invite_admins():
+    with Session(engine) as session:
+        users = session.exec(
+            select(User).where(
+                User.is_admin == True,
+                User.current_step < len(script),
+                User.next_step_invite_sent == False,
+            )
+        ).all()
+        for user in users:
+            if await send_invite(user):
+                user.next_step_invite_sent = True
+                user.step_sent_time = 0.0
+                session.commit()
+
+
 async def update_next_steps():
     while True:
-        current_time = time()
         next_step_delay = settings["next_step_delay"]
         if next_step_delay["type"] == "Period":
-            time_threshold = current_time - next_step_delay["value"]
-        elif next_step_delay["type"] == "Fixed time":
-            start_of_day = (
-                datetime.fromtimestamp(current_time)
-                .replace(hour=0, minute=0, second=0, microsecond=0)
-                .timestamp()
-            )
+            time_threshold = now() - next_step_delay["value"]
+            await send_invites(time_threshold)
+        if next_step_delay["type"] == "Fixed time":
+            utc_plus_3 = timezone(timedelta(hours=3))
+            now_dt = datetime.now(utc_plus_3)
+            start_of_day = now_dt.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ).timestamp()
             time_threshold = start_of_day + next_step_delay["value"]
-        else:
-            raise ValueError("Invalid next_step_delay type in settings")
-
-        with Session(engine) as session:
-
-            users = session.exec(
-                select(User).where(
-                    User.payed == True,
-                    User.current_step < len(script),
-                    User.step_sent_time < time_threshold,
-                    User.next_step_invite_sent == False,
-                )
-            ).all()  # type: ignore
-
-            for user in users:
-                user.current_step += 1
-                user.step_sent_time = 0.0
-                if user.current_step < len(script):
-                    step = script[user.current_step]
-                    try:
-                        kbd = InlineKeyboardMarkup(
-                            inline_keyboard=[
-                                [
-                                    InlineKeyboardButton(
-                                        text=settings["messages"]["next_step_button"],
-                                        callback_data="get_step",
-                                    )
-                                ]
-                            ]
-                        )
-                        await bot.send_message(
-                            chat_id=user.id,
-                            text=settings["messages"]["step_invite"].format(
-                                title=step["title"],
-                                description=step["description"],
-                                step_number=user.current_step+1,
-                            ),
-                            reply_markup=kbd,
-                        )
-                        logger.info(bms.step_invite.format(id=user.id))
-                        user.next_step_invite_sent = True
-                        session.commit()
-                    except Exception as e:
-                        logger.error(bms.message_failed.format(id=user.id, e=e))
-                        session.rollback()
-                else:
-                    await bot.send_message(
-                        chat_id=user.id,
-                        text=settings["messages"]["script_completed"],
-                    )
-                    logger.info(bms.script_completed.format(id=user.id))
-                    session.commit()
+            if now() > time_threshold:
+                await send_invites(time_threshold)
+            else:
+                await invite_zero_steppers()
+        await invite_admins()
         await asyncio.sleep(1)
 
 
