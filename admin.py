@@ -1,11 +1,39 @@
 import streamlit as st
-import json
 import datetime as dt
 from dotenv import load_dotenv
 import os
+import httpx
 
 load_dotenv()
 admin_password = os.getenv("ADMIN_PASSWORD")
+backend_url = os.getenv("BACKEND_URL")
+
+if backend_url is None:
+    raise ValueError("BACKEND_URL environment variable not set")
+
+backend_client = httpx.Client(base_url=backend_url, timeout=10.0)
+
+
+def fetch_script() -> list[dict]:
+    response = backend_client.get("/script")
+    response.raise_for_status()
+    return response.json()
+
+
+def save_script(script: list[dict]) -> None:
+    response = backend_client.put("/script", json=script)
+    response.raise_for_status()
+
+
+def fetch_settings() -> dict:
+    response = backend_client.get("/settings")
+    response.raise_for_status()
+    return response.json()
+
+
+def save_settings(settings: dict) -> None:
+    response = backend_client.put("/settings", json=settings)
+    response.raise_for_status()
 
 if "logged_in" not in st.session_state or not st.session_state["logged_in"]:
     st.info("Please log in to access the admin panel.")
@@ -30,8 +58,7 @@ def steps_page():
         changed()
 
     if "script" not in st.session_state:
-        with open("script.json", "r", encoding="utf-8") as f:
-            st.session_state["script"] = json.load(f)
+        st.session_state["script"] = fetch_script()
     script = st.session_state["script"]
     st.title("Manage Steps")
 
@@ -188,8 +215,7 @@ def steps_page():
 
         if "changed" in st.session_state and st.session_state["changed"]:
             if st.button("Save All", type="primary"):
-                with open("script.json", "w", encoding="utf-8") as f:
-                    json.dump(script, f, indent=4, ensure_ascii=False)
+                save_script(script)
                 st.session_state["changed"] = False
                 st.success("Changes saved successfully!")
                 st.rerun()
@@ -206,8 +232,7 @@ def setings_page():
         st.session_state["settings_changed"] = True
 
     if True:  # "settings" not in st.session_state:
-        with open("settings.json", "r", encoding="utf-8") as f:
-            st.session_state["settings"] = json.load(f)
+        st.session_state["settings"] = fetch_settings()
     settings = st.session_state["settings"]
 
     st.title("Settings")
@@ -263,8 +288,7 @@ def setings_page():
 
     if "settings_changed" in st.session_state and st.session_state["settings_changed"]:
         if st.button("Save Settings", type="primary"):
-            with open("settings.json", "w", encoding="utf-8") as f:
-                json.dump(settings, f, indent=4, ensure_ascii=False)
+            save_settings(settings)
             st.session_state["settings"] = settings
             st.session_state["settings_changed"] = False
             st.rerun()

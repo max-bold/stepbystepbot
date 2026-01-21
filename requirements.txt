@@ -1,6 +1,11 @@
 aiogram
+fastapi
+httpx
 python-dotenv
+pytest
+pytest-asyncio
 SQLAlchemy
 sqlmodel
 streamlit
+uvicorn
 yookassa
