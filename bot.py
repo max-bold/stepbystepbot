@@ -1,10 +1,12 @@
+import os
 from typing import Any
 from sqlmodel import SQLModel, create_engine, Field, Session, select
-from sqlalchemy import BigInteger
+from sqlalchemy import BigInteger, exc
 from dotenv import load_dotenv
 from os import getenv
 import json
 import asyncio
+import shutil
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
@@ -45,21 +47,29 @@ class User(SQLModel, table=True):
 load_dotenv()
 db_url = getenv("DB_URL")
 bot_key = getenv("BOT_KEY")
-uploads_dir = getenv("UPLOADS_DIR")
-script_path = getenv("SCRIPT_PATH")
 
 if db_url is None:
     raise ValueError("DB_URL environment variable not set")
-
-if script_path is None:
-    raise ValueError("SCRIPT_PATH environment variable not set")
 
 if bot_key is None:
     raise ValueError("BOT_KEY environment variable not set")
 
 engine = create_engine(db_url)
-script: list[dict] = json.load(open(script_path, "r", encoding="utf-8"))
-settings: dict[str, Any] = json.load(open("settings.json", "r", encoding="utf-8"))
+
+try:
+    script: list[dict] = json.load(open("script.json", "r", encoding="utf-8"))
+except FileNotFoundError:
+    shutil.copy("test_script.json", "script.json")
+    logger.info("script.json not found, copied test_script.json to script.json")
+    script: list[dict] = json.load(open("script.json", "r", encoding="utf-8"))
+
+try:    
+    settings: dict[str, Any] = json.load(open("settings.json", "r", encoding="utf-8"))
+except FileNotFoundError:
+    shutil.copy("default_settings.json", "settings.json")
+    settings: dict[str, Any] = json.load(open("settings.json", "r", encoding="utf-8"))
+    logger.info("settings.json not found, copied default_settings.json to settings.json")
+
 bot = Bot(token=bot_key)
 dp = Dispatcher()
 
@@ -426,37 +436,40 @@ async def default_message_handler(message: Message):
 
 async def check_payments():
     while True:
-        with Session(engine) as session:
-            users = session.exec(
-                select(User).where(
-                    User.payment_status == "pending",
-                    User.payed == False,
-                )
-            ).all()
-            if users:
-                for user in users:
-                    logger.info(bms.check_payment.format(id=user.id))
-                    status = get_payment_status(user.payment_key)
-                    if status == "succeeded":
-                        user.payed = True
-                        user.payment_status = "succeeded"
-                        session.commit()
-                        logger.info(bms.payment_confirmed.format(id=user.id))
-                        await bot.send_message(
-                            chat_id=user.id,
-                            text=settings["messages"]["payment_successful"],
-                        )
-                    elif status == "canceled":
-                        user.payment_status = "canceled"
-                        session.commit()
-                        logger.info(bms.payment_canceled.format(id=user.id))
-                        await bot.send_message(
-                            chat_id=user.id,
-                            text=settings["messages"]["payment_canceled"],
-                        )
-                    await asyncio.sleep(1)  # avoid hammering the payment API
-            else:
-                await asyncio.sleep(1)
+        try:
+            with Session(engine) as session:
+                users = session.exec(
+                    select(User).where(
+                        User.payment_status == "pending",
+                        User.payed == False,
+                    )
+                ).all()
+                if users:
+                    for user in users:
+                        logger.info(bms.check_payment.format(id=user.id))
+                        status = get_payment_status(user.payment_key)
+                        if status == "succeeded":
+                            user.payed = True
+                            user.payment_status = "succeeded"
+                            session.commit()
+                            logger.info(bms.payment_confirmed.format(id=user.id))
+                            await bot.send_message(
+                                chat_id=user.id,
+                                text=settings["messages"]["payment_successful"],
+                            )
+                        elif status == "canceled":
+                            user.payment_status = "canceled"
+                            session.commit()
+                            logger.info(bms.payment_canceled.format(id=user.id))
+                            await bot.send_message(
+                                chat_id=user.id,
+                                text=settings["messages"]["payment_canceled"],
+                            )
+                        await asyncio.sleep(1)  # avoid hammering the payment API
+                else:
+                    await asyncio.sleep(1)
+        except Exception as e:
+            logger.error(f"Failed to check payments: {e}")
 
 
 NEXT_STEP_KBD = InlineKeyboardMarkup(
@@ -541,34 +554,39 @@ async def invite_admins():
 
 async def update_next_steps():
     while True:
-        next_step_delay = settings["next_step_delay"]
-        if next_step_delay["type"] == "Period":
-            time_threshold = now() - next_step_delay["value"]
-            await send_invites(time_threshold)
-        if next_step_delay["type"] == "Fixed time":
-            utc_plus_3 = timezone(timedelta(hours=3))
-            now_dt = datetime.now(utc_plus_3)
-            start_of_day = now_dt.replace(
-                hour=0, minute=0, second=0, microsecond=0
-            ).timestamp()
-            time_threshold = start_of_day + next_step_delay["value"]
-            if now() > time_threshold:
+        try:
+            next_step_delay = settings["next_step_delay"]
+            if next_step_delay["type"] == "Period":
+                time_threshold = now() - next_step_delay["value"]
                 await send_invites(time_threshold)
-            else:
-                await invite_zero_steppers()
-        await invite_admins()
-        await asyncio.sleep(1)
+            if next_step_delay["type"] == "Fixed time":
+                utc_plus_3 = timezone(timedelta(hours=3))
+                now_dt = datetime.now(utc_plus_3)
+                start_of_day = now_dt.replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                ).timestamp()
+                time_threshold = start_of_day + next_step_delay["value"]
+                if now() > time_threshold:
+                    await send_invites(time_threshold)
+                else:
+                    await invite_zero_steppers()
+            await invite_admins()
+            await asyncio.sleep(1)
+        except Exception as e:
+            logger.error(f"Failed to update next steps: {e}")
 
 
 async def reload_settings():
     while True:
-        global settings
-        global script
-        settings = json.load(open("settings.json", "r", encoding="utf-8"))
-        script = json.load(open("script.json", "r", encoding="utf-8"))
-        logger.info("Settings reloaded")
-        await asyncio.sleep(10)  # reload every 10 seconds
-
+        try:
+            global settings
+            global script
+            settings = json.load(open("settings.json", "r", encoding="utf-8"))
+            script = json.load(open("script.json", "r", encoding="utf-8"))
+            # logger.info("Settings reloaded")
+            await asyncio.sleep(10)  # reload every 10 seconds
+        except Exception as e:
+            logger.error(f"Failed to reload settings: {e}")
 
 async def main():
     logger.info("Creating database tables")

@@ -1,0 +1,77 @@
+[
+    {
+        "title": "Приветствие",
+        "description": "В этом шаге мы расскажем, что нам предстоит",
+        "content": [
+            {
+                "type": "text",
+                "value": "Это тестовый скрипт для бота. Посмотрите пожалуйста все ли шаги отрабатывают правильно."
+            },
+            {
+                "type": "photo",
+                "file_id": "AgACAgIAAxkBAAICXmlbnQxHI4dy6JdMJvyzK3lTjebJAAJREGsb-srYShgY5WnLfbKyAQADAgADeQADOAQ",
+                "caption": "Ну и котик вам в подарок, что-бы было не так скучно работать тестировщиком!"
+            },
+            {
+                "type": "text",
+                "value": "Новое текстовое сообщение"
+            }
+        ]
+    },
+    {
+        "title": "Вложение фалов",
+        "description": "На этом шаге мы проверим возможность отправки всех видов сообщений.",
+        "content": [
+            {
+                "type": "photo",
+                "file_id": "AgACAgIAAxkBAAIBfWlaTvDz0ixsNqljA1lwl2w10uPUAAIdC2sbaAnBSiNPjFGbzW6BAQADAgADeQADOAQ",
+                "caption": "Извините понадаедаю вам своей мордой"
+            },
+            {
+                "type": "video",
+                "file_id": "BAACAgIAAxkBAAIBK2lZxChxGLqhNagSeAcOShRKwBVmAAI3kAACaAnBSqJADDhuHcsbOAQ",
+                "caption": "И еще немного меня любимого"
+            },
+            {
+                "type": "audio",
+                "file_id": "CQACAgIAAxkBAAIBOWlZxw_lVBsn1jURFwZJ9OgOCmGdAAI7kAACaAnBSqnzFx5RA-j5OAQ",
+                "caption": "А куда же без AC/DC!"
+            },
+            {
+                "type": "document",
+                "file_id": "BQACAgIAAxkBAAIBhmlaT5JbfT2yDn4q854lOOrWxQsTAAJchgAC-srQSoZ5BGmYXKovOAQ",
+                "caption": "Немножко PDFок"
+            },
+            {
+                "type": "voice",
+                "file_id": "AwACAgIAAxkBAAIBNGlZxXJqDydnK17GeF3prDrEh3J-AAI5kAACaAnBSuF0TChxxc9hOAQ",
+                "caption": "И еще меня любимого"
+            },
+            {
+                "type": "video note",
+                "file_id": "DQACAgIAAxkBAAIBM2lZxNriyxBXnNZI5p7hlN3M7qmSAAI4kAACaAnBSsrZeUXflk-_OAQ",
+                "caption": "Ну и кружочек вам напоследок!"
+            }
+        ]
+    },
+    {
+        "title": "Завершение",
+        "description": "Осталось помахать друг другу лапкой",
+        "content": [
+            {
+                "type": "photo",
+                "file_id": "AgACAgIAAxkDAAOcaVf88k6XUc5E35JKZboIyRThyDQAAnMNaxsPV8FKLNUkjFVm1lABAAMCAAN4AAM4BA",
+                "caption": "Ну и еще один котик вам на последок"
+            },
+            {
+                "type": "text",
+                "value": "Ну что кажется все работатет? Нет - пишите мне @boldmarch"
+            }
+        ]
+    },
+    {
+        "title": "New Step",
+        "description": "",
+        "content": []
+    }
+]
