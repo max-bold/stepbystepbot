@@ -3,8 +3,6 @@ from ast import In
 from operator import call
 import os
 from typing import Any, Generator, Literal
-from aiogram.fsm import state
-from alembic import context
 from sqlmodel import SQLModel, create_engine, Field, Session, select
 from sqlalchemy import BigInteger, exc
 from dotenv import load_dotenv
