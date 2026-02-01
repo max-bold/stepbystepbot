@@ -86,22 +86,6 @@ if bot_key is None:
 
 engine = create_engine(db_url)
 
-# try:
-#     script: list[dict] = json.load(open("script.json", "r", encoding="utf-8"))
-# except FileNotFoundError:
-#     shutil.copy("test_script.json", "script.json")
-#     logger.info("script.json not found, copied test_script.json to script.json")
-#     script: list[dict] = json.load(open("script.json", "r", encoding="utf-8"))
-
-# try:
-#     settings: dict[str, Any] = json.load(open("settings.json", "r", encoding="utf-8"))
-# except FileNotFoundError:
-#     shutil.copy("default_settings.json", "settings.json")
-#     settings: dict[str, Any] = json.load(open("settings.json", "r", encoding="utf-8"))
-#     logger.info(
-#         "settings.json not found, copied default_settings.json to settings.json"
-#     )
-
 try:
     promo_codes: list[str] = json.load(open("promo_codes.json", "r", encoding="utf-8"))
 except FileNotFoundError:
@@ -127,10 +111,10 @@ class Settings:
             logger.warning(
                 "settings.json not found, copied default_settings.json to settings.json"
             )
-            settings =  json.load(open("default_settings.json", "r", encoding="utf-8"))
+            settings = json.load(open("default_settings.json", "r", encoding="utf-8"))
             json.dump(settings, open("settings.json", "w", encoding="utf-8"))
             return settings
-        
+
     def _reload(self) -> None:
         if self.reload_time + 10 < monotonic():
             self.settings = self._load()
@@ -144,10 +128,11 @@ class Settings:
             self._dump()
         return self.settings["create_paid_users"]
 
-    class NSD():
-        def __init__(self,data:dict[str,Any]) -> None:
-            self.type:Literal["Fixed time", "Period"] = data["type"]
-            self.value:int = data["value"]
+    class NSD:
+        def __init__(self, data: dict[str, Any]) -> None:
+            self.type: Literal["Fixed time", "Period"] = data["type"]
+            self.value: int = data["value"]
+
     @property
     def next_step_delay(self) -> NSD:
         self._reload()
@@ -165,10 +150,12 @@ class Settings:
             self.settings["messages"][key] = f"Empty {key} message"
             self._dump()
         return self.settings["messages"][key]
-    
+
+
 settings = Settings()
 
-class Script():
+
+class Script:
     def __init__(self) -> None:
         self.script = self._load()
         self.reload_time = monotonic()
@@ -179,7 +166,7 @@ class Script():
             return json.load(open("script.json", "r", encoding="utf-8"))
         except FileNotFoundError:
             script = json.load(open("test_script.json", "r", encoding="utf-8"))
-            json.dump(script, open("script.json","w", encoding="utf-8"))
+            json.dump(script, open("script.json", "w", encoding="utf-8"))
             logger.info("script.json not found, copied test_script.json to script.json")
             return script
 
@@ -191,10 +178,11 @@ class Script():
     def __getitem__(self, n):
         self._reload()
         return self.script[n]
-    
+
     def __len__(self):
         return len(self.script)
-    
+
+
 script = Script()
 
 
@@ -289,7 +277,7 @@ async def start_command_handler(message: Message):
                         ],
                         [
                             InlineKeyboardButton(
-                                text="Ввести промокод",
+                                text=settings.messages("promo button"),
                                 callback_data="enter_promo_code",
                             )
                         ],
@@ -315,14 +303,14 @@ async def enter_promo_code_handler(callback_query: CallbackQuery, state: FSMCont
             user_id = callback_query.from_user.id
             await bot.send_message(
                 user_id,
-                "Пожалуйста, введите промокод:",
-                reply_markup=ForceReply(input_field_placeholder="Промокод"),
+                settings.messages("promo prompt"),
+                reply_markup=ForceReply(input_field_placeholder="code"),
             )
             await state.set_state(PromoCodeEntry.waiting_promo_code)
         else:
             await bot.send_message(
                 callback_query.from_user.id,
-                "Превышено максимальное количество попыток ввода промокода. Пожалуйста, свяжитесь с администратором.",
+                settings.messages("promo limit reached"),
             )
     await callback_query.answer()
 
@@ -345,8 +333,7 @@ async def promo_code_entry_handler(message: Message, state: FSMContext):
                         json.dump(
                             promo_codes, open("promo_codes.json", "w", encoding="utf-8")
                         )
-                        await message.answer(
-                            "Промокод принят. Теперь у вас есть доступ к курсу!"
+                        await message.answer(settings.messages("promo_ok")
                         )
                         logger.info(
                             f"User {user_id} used promo code {entered_code} and is now registered."
@@ -358,14 +345,14 @@ async def promo_code_entry_handler(message: Message, state: FSMContext):
                         await state.update_data(promo_attempts=attempts)
                         if attempts == 3:
                             await message.answer(
-                                "Превышено максимальное количество попыток ввода промокода."
+                                settings.messages("promo limit reached")
                             )
                             await state.set_state(None)
                         else:
                             await message.answer(
-                                "Промокод неверный. Попробуйте снова:",
+                                settings.messages("promo error"),
                                 reply_markup=ForceReply(
-                                    input_field_placeholder="Промокод"
+                                    input_field_placeholder="code"
                                 ),
                             )
                         logger.info(
@@ -411,9 +398,7 @@ async def upload_mode_handler(message: Message):
     elif message.voice:
         await message.reply(message.voice.file_id)
     else:
-        await message.answer(
-            "Unsupported message type. Please send media files (photo, video, document, etc.) to get their file IDs. Use /upload to exit upload mode."
-        )
+        await message.answer(settings.messages("upload_failed"))
 
 
 @dp.message(Command("login"), ~AdminFilter())
@@ -673,9 +658,7 @@ async def get_step_command_handler(callback_query: CallbackQuery):
                 await callback_query.answer()
                 return
             elif user.current_step >= len(script):
-                await bot.send_message(
-                    user_id, settings.messages("script_completed")
-                )
+                await bot.send_message(user_id, settings.messages("script_completed"))
                 logger.info(bms.script_completed.format(id=user_id))
                 return
             else:
@@ -883,18 +866,6 @@ async def update_next_steps():
             logger.error(f"Failed to update next steps: {e}")
 
 
-# async def reload_settings():
-#     while True:
-#         try:
-#             global settings
-#             global script
-#             settings = json.load(open("settings.json", "r", encoding="utf-8"))
-#             script = json.load(open("script.json", "r", encoding="utf-8"))
-#             # logger.info("Settings reloaded")
-#             await asyncio.sleep(10)  # reload every 10 seconds
-#         except Exception as e:
-#             logger.error(f"Failed to reload settings: {e}")
-
 
 async def main():
     logger.info("Creating database tables")
@@ -903,8 +874,6 @@ async def main():
     asyncio.create_task(check_payments())
     logger.info("Starting next step update task")
     asyncio.create_task(update_next_steps())
-    # logger.info("Starting settings reload task")
-    # asyncio.create_task(reload_settings())
     logger.info("Starting bot polling")
     await dp.start_polling(bot)
     logger.info("Bot has stopped")
