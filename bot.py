@@ -1,5 +1,10 @@
+from argparse import Action
+from ast import In
+from operator import call
 import os
-from typing import Any
+from typing import Any, Generator, Literal
+from aiogram.fsm import state
+from alembic import context
 from sqlmodel import SQLModel, create_engine, Field, Session, select
 from sqlalchemy import BigInteger, exc
 from dotenv import load_dotenv
@@ -7,6 +12,7 @@ from os import getenv
 import json
 import asyncio
 import shutil
+import secrets
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
@@ -16,13 +22,37 @@ from aiogram.types import (
     InlineKeyboardButton,
     FSInputFile,
     CallbackQuery,
+    ForceReply,
 )
 
 import logging
+
+from streamlit import user
 from kassa import create_payment, get_payment_status
 
 import bot_messages as bms
 from datetime import datetime, timezone, timedelta, time
+
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.context import FSMContext
+from aiogram.filters import Filter
+
+from contextlib import contextmanager
+
+from time import monotonic
+
+
+class AdminLogin(StatesGroup):
+    waiting_password = State()
+
+
+class PromoCodeEntry(StatesGroup):
+    waiting_promo_code = State()
+
+
+class DeleteAccount(StatesGroup):
+    waiting_confirmation = State()
+
 
 logging.basicConfig(
     filename="bot.log",
@@ -56,22 +86,166 @@ if bot_key is None:
 
 engine = create_engine(db_url)
 
-try:
-    script: list[dict] = json.load(open("script.json", "r", encoding="utf-8"))
-except FileNotFoundError:
-    shutil.copy("test_script.json", "script.json")
-    logger.info("script.json not found, copied test_script.json to script.json")
-    script: list[dict] = json.load(open("script.json", "r", encoding="utf-8"))
+# try:
+#     script: list[dict] = json.load(open("script.json", "r", encoding="utf-8"))
+# except FileNotFoundError:
+#     shutil.copy("test_script.json", "script.json")
+#     logger.info("script.json not found, copied test_script.json to script.json")
+#     script: list[dict] = json.load(open("script.json", "r", encoding="utf-8"))
 
-try:    
-    settings: dict[str, Any] = json.load(open("settings.json", "r", encoding="utf-8"))
+# try:
+#     settings: dict[str, Any] = json.load(open("settings.json", "r", encoding="utf-8"))
+# except FileNotFoundError:
+#     shutil.copy("default_settings.json", "settings.json")
+#     settings: dict[str, Any] = json.load(open("settings.json", "r", encoding="utf-8"))
+#     logger.info(
+#         "settings.json not found, copied default_settings.json to settings.json"
+#     )
+
+try:
+    promo_codes: list[str] = json.load(open("promo_codes.json", "r", encoding="utf-8"))
 except FileNotFoundError:
-    shutil.copy("default_settings.json", "settings.json")
-    settings: dict[str, Any] = json.load(open("settings.json", "r", encoding="utf-8"))
-    logger.info("settings.json not found, copied default_settings.json to settings.json")
+    promo_codes: list[str] = []
+
 
 bot = Bot(token=bot_key)
 dp = Dispatcher()
+
+
+class Settings:
+    def __init__(self) -> None:
+        self.settings = self._load()
+        self.reload_time = monotonic()
+
+    def _dump(self) -> None:
+        json.dump(self.settings, open("settings.json", "w", encoding="utf-8"))
+
+    def _load(self) -> dict[str, Any]:
+        try:
+            return json.load(open("settings.json", "r", encoding="utf-8"))
+        except FileNotFoundError:
+            logger.warning(
+                "settings.json not found, copied default_settings.json to settings.json"
+            )
+            settings =  json.load(open("default_settings.json", "r", encoding="utf-8"))
+            json.dump(settings, open("settings.json", "w", encoding="utf-8"))
+            return settings
+        
+    def _reload(self) -> None:
+        if self.reload_time + 10 < monotonic():
+            self.settings = self._load()
+            self.reload_time = monotonic()
+
+    @property
+    def create_paid_users(self) -> bool:
+        self._reload()
+        if "create_paid_users" not in self.settings:
+            self.settings["create_paid_users"] = False
+            self._dump()
+        return self.settings["create_paid_users"]
+
+    class NSD():
+        def __init__(self,data:dict[str,Any]) -> None:
+            self.type:Literal["Fixed time", "Period"] = data["type"]
+            self.value:int = data["value"]
+    @property
+    def next_step_delay(self) -> NSD:
+        self._reload()
+        if "next_step_delay" not in self.settings:
+            self.settings["next_step_delay"] = {"type": "Period", "value": 300}
+            self._dump()
+        return self.NSD(self.settings["next_step_delay"])
+
+    def messages(self, key: str) -> str:
+        self._reload()
+        if "messages" not in self.settings:
+            self.settings["messages"] = {}
+            self._dump()
+        if key not in self.settings["messages"]:
+            self.settings["messages"][key] = f"Empty {key} message"
+            self._dump()
+        return self.settings["messages"][key]
+    
+settings = Settings()
+
+class Script():
+    def __init__(self) -> None:
+        self.script = self._load()
+        self.reload_time = monotonic()
+        pass
+
+    def _load(self) -> list[dict]:
+        try:
+            return json.load(open("script.json", "r", encoding="utf-8"))
+        except FileNotFoundError:
+            script = json.load(open("test_script.json", "r", encoding="utf-8"))
+            json.dump(script, open("script.json","w", encoding="utf-8"))
+            logger.info("script.json not found, copied test_script.json to script.json")
+            return script
+
+    def _reload(self):
+        if self.reload_time + 10 < monotonic():
+            self.settings = self._load()
+            self.reload_time = monotonic()
+
+    def __getitem__(self, n):
+        self._reload()
+        return self.script[n]
+    
+    def __len__(self):
+        return len(self.script)
+    
+script = Script()
+
+
+class UploadModeFilter(Filter):
+    async def __call__(self, message: Message) -> bool:
+        user_id = message.from_user.id if message.from_user else None
+        if user_id:
+            with Session(engine) as session:
+                user = session.get(User, user_id)
+                if user and user.upload_mode:
+                    return True
+        return False
+
+
+class AdminFilter(Filter):
+    async def __call__(self, message: Message) -> bool:
+        user_id = message.from_user.id if message.from_user else None
+        if user_id:
+            with Session(engine) as session:
+                user = session.get(User, user_id)
+                if user and user.is_admin:
+                    return True
+        return False
+
+
+class UserRegisteredFilter(Filter):
+    async def __call__(self, message: Message) -> bool | dict[str, Any]:
+        user_id = message.from_user.id if message.from_user else None
+        if user_id:
+            with Session(engine) as session:
+                user = session.get(User, user_id)
+                if user:
+                    return True
+        return False
+
+
+@contextmanager
+def get_user(user_id: int) -> Generator[User, None, None]:
+    with Session(engine) as session:
+        user = session.get(User, user_id)
+        if not user:
+            user = User(id=user_id)
+            user.payed = settings.create_paid_users
+            session.add(user)
+            logger.info(f"Created user with id={user.id}")
+        try:
+            yield user
+            session.commit()
+        except:
+            session.rollback()
+            raise
 
 
 def now() -> float:
@@ -93,7 +267,7 @@ async def start_command_handler(message: Message):
             user = session.get(User, message.from_user.id)
             if not user:
                 user = User(id=message.from_user.id)
-                user.payed = settings["create_paid_users"]
+                user.payed = settings.create_paid_users
                 session.add(user)
                 session.commit()
                 logger.info(bms.user_created.format(id=user.id))
@@ -109,31 +283,107 @@ async def start_command_handler(message: Message):
                     inline_keyboard=[
                         [
                             InlineKeyboardButton(
-                                text=settings["messages"]["pay_button_text"],
+                                text=settings.messages("pay_button_text"),
                                 url=confirmation_url,
                             )
-                        ]
+                        ],
+                        [
+                            InlineKeyboardButton(
+                                text="Ввести промокод",
+                                callback_data="enter_promo_code",
+                            )
+                        ],
                     ]
                 )
                 await message.answer(
-                    settings["messages"]["welcome_message"],
+                    settings.messages("welcome_message"),
                     reply_markup=keyboard,
                 )
                 logger.info(bms.pay_link_sent.format(id=user.id))
             else:
-                await message.answer(settings["messages"]["already_registered"])
+                await message.answer(settings.messages("already_registered"))
                 logger.info(bms.wlc_back.format(id=user.id))
     else:
         logger.warning(bms.no_user_id)
 
 
-@dp.message(Command("upload"))
+# Handle `enter_promo_code` callback query
+@dp.callback_query(F.data == "enter_promo_code")
+async def enter_promo_code_handler(callback_query: CallbackQuery, state: FSMContext):
+    if callback_query.from_user:
+        if await state.get_value("promo_attempts", 0) < 3:
+            user_id = callback_query.from_user.id
+            await bot.send_message(
+                user_id,
+                "Пожалуйста, введите промокод:",
+                reply_markup=ForceReply(input_field_placeholder="Промокод"),
+            )
+            await state.set_state(PromoCodeEntry.waiting_promo_code)
+        else:
+            await bot.send_message(
+                callback_query.from_user.id,
+                "Превышено максимальное количество попыток ввода промокода. Пожалуйста, свяжитесь с администратором.",
+            )
+    await callback_query.answer()
+
+
+# Handle promo code entry
+@dp.message(PromoCodeEntry.waiting_promo_code)
+async def promo_code_entry_handler(message: Message, state: FSMContext):
+    attempts = await state.get_value("promo_attempts", 0)
+    if attempts < 3:
+        if message.from_user and message.text:
+            user_id = message.from_user.id
+            entered_code = message.text.strip()
+            with Session(engine) as session:
+                user = session.get(User, user_id)
+                if user:
+                    if entered_code in promo_codes:
+                        user.payed = True
+                        session.commit()
+                        promo_codes.remove(entered_code)
+                        json.dump(
+                            promo_codes, open("promo_codes.json", "w", encoding="utf-8")
+                        )
+                        await message.answer(
+                            "Промокод принят. Теперь у вас есть доступ к курсу!"
+                        )
+                        logger.info(
+                            f"User {user_id} used promo code {entered_code} and is now registered."
+                        )
+                        await state.set_state(None)
+                        await state.update_data(promo_attempts=0)
+                    else:
+                        attempts += 1
+                        await state.update_data(promo_attempts=attempts)
+                        if attempts == 3:
+                            await message.answer(
+                                "Превышено максимальное количество попыток ввода промокода."
+                            )
+                            await state.set_state(None)
+                        else:
+                            await message.answer(
+                                "Промокод неверный. Попробуйте снова:",
+                                reply_markup=ForceReply(
+                                    input_field_placeholder="Промокод"
+                                ),
+                            )
+                        logger.info(
+                            f"User {user_id} entered invalid promo code {entered_code}."
+                        )
+                else:
+                    await message.answer(settings.messages("not_registered"))
+                    logger.info(
+                        bms.not_registered.format(id=user_id, action="enter promo code")
+                    )
+
+
+@dp.message(Command("upload"), AdminFilter())
 async def upload_command(message: Message):
-    user_id = message.from_user.id if message.from_user else None
-    if user_id:
+    if message.from_user:
         with Session(engine) as session:
-            user = session.get(User, user_id)
-            if user and user.is_admin:
+            user = session.get(User, message.from_user.id)
+            if user:
                 user.upload_mode = not user.upload_mode
                 session.commit()
                 await message.answer(
@@ -141,90 +391,119 @@ async def upload_command(message: Message):
                         state="enabled" if user.upload_mode else "disabled."
                     )
                 )
-            else:
-                await message.answer("You are not authorized to perform this action. Only admins can use this command.")
-                logger.info(bms.not_registered.format(id=user_id))
+                logger.info(f"Upload mode for user {user.id} set to {user.upload_mode}")
 
 
-@dp.message(Command("login"))
-async def login_command_handler(message: Message):
-    if message.from_user and message.text:
-        user_id = message.from_user.id
-        key = message.text.split(" ")[-1]
-        if key == getenv("ADMIN_PASSWORD"):
-            with Session(engine) as session:
-                user = session.get(User, user_id)
-                if user:
+# Message handler in upload mode
+@dp.message(UploadModeFilter())
+async def upload_mode_handler(message: Message):
+    logger.info(f"Received message in upload mode")
+    if message.photo:
+        await message.reply(message.photo[-1].file_id)
+    elif message.video:
+        await message.reply(message.video.file_id)
+    elif message.video_note:
+        await message.reply(message.video_note.file_id)
+    elif message.document:
+        await message.reply(message.document.file_id)
+    elif message.audio:
+        await message.reply(message.audio.file_id)
+    elif message.voice:
+        await message.reply(message.voice.file_id)
+    else:
+        await message.answer(
+            "Unsupported message type. Please send media files (photo, video, document, etc.) to get their file IDs. Use /upload to exit upload mode."
+        )
+
+
+@dp.message(Command("login"), ~AdminFilter())
+async def login_command_handler(message: Message, state: FSMContext):
+    if await state.get_value("login_attempts", 0) < 3:
+        await message.answer(
+            "Please enter the admin password:",
+            reply_markup=ForceReply(input_field_placeholder="password"),
+        )
+        await state.set_state(AdminLogin.waiting_password)
+    else:
+        await message.answer(
+            "Too many login attempts. Please contact the administrator."
+        )
+    if message.from_user:
+        logger.info(bms.login_attempt.format(admin_id=message.from_user.id))
+
+
+@dp.message(AdminLogin.waiting_password)
+async def admin_password_handler(message: Message, state: FSMContext):
+    attempts = await state.get_value("login_attempts", 0)
+    if attempts < 3:
+        if message.from_user and message.text:
+            user_id = message.from_user.id
+            entered_password = message.text.strip()
+            if entered_password == getenv("ADMIN_PASSWORD"):
+                with Session(engine) as session:
+                    user = session.get(User, user_id)
+                    if not user:
+                        user = User(id=user_id, payed=True, is_admin=True)
+                        session.add(user)
+                        logger.info(bms.user_created.format(id=user_id))
                     user.payed = True
                     user.is_admin = True
                     session.commit()
+                    await message.answer(
+                        "Теперь у вас есть права администратора.\n\nВам доступны следующие команды:\n/upload - для загрузки файлов\n/logout - для выхода из режима администратора\n/get_step - для выбора и получения шага.\n/delete_me - для удаления своего id из БД\n/reset - для возврата к первому шагу\n/gen_promo - для генерации промокода"
+                    )
                     logger.info(bms.login_successful.format(admin_id=user_id))
+                await state.set_state(None)
+                await state.update_data(login_attempts=0)
+            else:
+                attempts += 1
+                await state.update_data(login_attempts=attempts)
+                if attempts == 3:
+                    await message.answer(
+                        "Too many login attempts. Please contact the administrator."
+                    )
+                    await state.set_state(None)
                 else:
-                    user = User(id=user_id, payed=True, is_admin=True)
-                    session.add(user)
-                    session.commit()
-                    logger.info(bms.created_admin.format(id=user_id))
-                await message.answer(settings["messages"]["login_successful"])
-                logger.info(bms.login_successful.format(admin_id=user_id))
-        else:
-            await message.answer("Wrong password. Send in /login <password> format")
-            logger.info(bms.invalid_login.format(admin_id=user_id))
+                    await message.answer(
+                        "Wrong password. Please try again:",
+                        reply_markup=ForceReply(input_field_placeholder="Пароль"),
+                    )
+                logger.info(bms.invalid_login.format(admin_id=user_id))
 
 
-@dp.message(Command("logout"))
+@dp.message(Command("logout"), AdminFilter())
 async def logout_command(message: Message):
-    user_id = message.from_user.id if message.from_user else None
-    if user_id:
+    if message.from_user:
         with Session(engine) as session:
-            user = session.get(User, user_id)
+            user = session.get(User, message.from_user.id)
             if user:
                 user.is_admin = False
                 session.commit()
                 await message.answer("You have been logged out from admin mode.")
-                logger.info(bms.admin_logout.format(admin_id=user_id))
-            else:
-                await message.answer(settings["messages"]["not_registered"])
-                logger.info(bms.not_registered.format(id=user_id))
+                logger.info(bms.admin_logout.format(admin_id=user.id))
 
 
-@dp.message(Command("get_step"))
+@dp.message(Command("get_step"), AdminFilter())
 async def get_step_message_handler(message: Message):
-    if message.from_user:
-        user_id = message.from_user.id
-        with Session(engine) as session:
-            user = session.get(User, user_id)
-            if not user:
-                await message.answer(settings["messages"]["not_registered"])
-                logger.info(bms.not_registered.format(id=user_id))
+    row_count = len(script) // 3 + (1 if len(script) % 3 != 0 else 0)
+    step_buttons = []
+    row = []
+    for i in range(row_count):
+        for j in range(3):
+            step_index = i * 3 + j
+            if step_index < len(script):
+                row.append(
+                    InlineKeyboardButton(
+                        text=f"{step_index+1}. {script[step_index]['title']}",
+                        callback_data=f"admin_get_step={step_index}",
+                    )
+                )
             else:
-                if user.is_admin:
-                    row_count = len(script) // 3 + (1 if len(script) % 3 != 0 else 0)
-                    step_buttons = []
-                    row = []
-                    for i in range(row_count):
-                        for j in range(3):
-                            step_index = i * 3 + j
-                            if step_index < len(script):
-                                row.append(
-                                    InlineKeyboardButton(
-                                        text=f"{step_index+1}. {script[step_index]['title']}",
-                                        callback_data=f"admin_get_step={step_index}",
-                                    )
-                                )
-                            else:
-                                # Add empty button to fill the row
-                                row.append(
-                                    InlineKeyboardButton(
-                                        text=" ", callback_data="empty"
-                                    )
-                                )
-                        step_buttons.append(row)
-                        row = []
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=step_buttons)
-                    await message.answer("Select a step:", reply_markup=keyboard)
-                else:
-                    await message.answer(settings["messages"]["not_admin"])
-                    logger.info(bms.get_step_not_admin.format(id=user_id))
+                row.append(InlineKeyboardButton(text=" ", callback_data="empty"))
+        step_buttons.append(row)
+        row = []
+    keyboard = InlineKeyboardMarkup(inline_keyboard=step_buttons)
+    await message.answer("Select a step:", reply_markup=keyboard)
 
 
 @dp.message(Command("reset"))
@@ -238,28 +517,68 @@ async def reset_command_handler(message: Message):
                 user.step_sent_time = 0.0
                 user.next_step_invite_sent = False
                 session.commit()
-                await message.answer(settings["messages"]["progress_reset"])
+                await message.answer(settings.messages("progress_reset"))
                 logger.info(bms.progress_reset.format(id=user_id))
             else:
-                await message.answer(settings["messages"]["not_registered"])
-                logger.info(bms.not_registered.format(id=user_id))
+                await message.answer(settings.messages("not_registered"))
+                logger.info(
+                    bms.not_registered.format(id=user_id, action="reset progress")
+                )
 
 
 # /delete_me command to delete user data from database
-@dp.message(Command("delete_me"))
-async def delete_me_command_handler(message: Message):
-    if message.from_user:
-        user_id = message.from_user.id
+@dp.message(Command("delete_me"), UserRegisteredFilter())
+async def delete_me_command_handler(message: Message, state: FSMContext):
+    await message.answer(
+        "Are you sure you want to delete your account?\n\n*This action cannot be undone!*",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Yes, delete my account",
+                        callback_data="confirm_delete_me",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="Cancel", callback_data="cancel_delete_me"
+                    ),
+                ],
+            ]
+        ),
+        parse_mode="Markdown",
+    )
+    await state.set_state(DeleteAccount.waiting_confirmation)
+    user_id = message.from_user.id if message.from_user else None
+    logger.info(f"User {user_id} initiated account deletion. Waiting for confirmation.")
+
+
+@dp.callback_query(DeleteAccount.waiting_confirmation)
+async def delete_me_callback_handler(callback: CallbackQuery, state: FSMContext):
+    if callback.data == "confirm_delete_me":
+        user_id = callback.from_user.id
         with Session(engine) as session:
             user = session.get(User, user_id)
             if user:
                 session.delete(user)
                 session.commit()
-                await message.answer("Your data has been deleted from the database.")
-                logger.info(f"User {user_id} data deleted from database.")
-            else:
-                await message.answer(settings["messages"]["not_registered"])
-                logger.info(bms.not_registered.format(id=user_id))
+                await bot.send_message(user_id, "Your account has been deleted.")
+                logger.info(f"User {user_id} account deleted from database.")
+        await state.set_state(None)
+    elif callback.data == "cancel_delete_me":
+        await bot.send_message(callback.from_user.id, "Account deletion cancelled.")
+        await state.set_state(None)
+    await callback.answer()
+
+
+# /gen_promo command to generate a promo code (admin only)
+@dp.message(Command("gen_promo"), AdminFilter())
+async def gen_promo_command_handler(message: Message):
+    promo_code = secrets.token_urlsafe(8)
+    promo_codes.append(promo_code)
+    json.dump(promo_codes, open("promo_codes.json", "w", encoding="utf-8"))
+    await message.answer(f"Generated promo code: `{promo_code}`", parse_mode="Markdown")
+    logger.info(bms.promo_code_generated.format(code=promo_code))
 
 
 async def send_step_content(user_id: int, step_number: int) -> bool:
@@ -340,20 +659,22 @@ async def get_step_command_handler(callback_query: CallbackQuery):
         with Session(engine) as session:
             user = session.get(User, user_id)
             if not user:
-                await callback_query.answer(settings["messages"]["not_registered"])
-                logger.info(bms.not_registered.format(id=user_id))
+                await callback_query.answer(settings.messages("not_registered"))
+                logger.info(
+                    bms.not_registered.format(id=user_id, action="request next step")
+                )
             elif not user.payed:
-                await callback_query.answer(settings["messages"]["not_payed"])
+                await callback_query.answer(settings.messages("not_payed"))
                 logger.info(bms.not_payed.format(id=user_id))
                 return
             elif user.step_sent_time:
-                await callback_query.answer(settings["messages"]["step_sent"])
+                await callback_query.answer(settings.messages("step_sent"))
                 logger.info(bms.step_sent.format(id=user_id))
                 await callback_query.answer()
                 return
             elif user.current_step >= len(script):
                 await bot.send_message(
-                    user_id, settings["messages"]["script_completed"]
+                    user_id, settings.messages("script_completed")
                 )
                 logger.info(bms.script_completed.format(id=user_id))
                 return
@@ -365,16 +686,16 @@ async def get_step_command_handler(callback_query: CallbackQuery):
                     session.commit()
                     if user.current_step >= len(script):
                         await bot.send_message(
-                            user_id, settings["messages"]["script_completed"]
+                            user_id, settings.messages("script_completed")
                         )
                         logger.info(bms.script_completed.format(id=user_id))
                     else:
-                        value: int = settings["next_step_delay"]["value"]
-                        if settings["next_step_delay"]["type"] == "Fixed time":
+                        value: int = settings.next_step_delay.value
+                        if settings.next_step_delay.type == "Fixed time":
                             hh = value // 3600
                             mm = (value % 3600) // 60
                             time_str = f"{hh:02}:{mm:02} МСК"
-                        elif settings["next_step_delay"]["type"] == "Period":
+                        elif settings.next_step_delay.type == "Period":
                             td = timedelta(seconds=value)
                             dt = datetime.fromtimestamp(user.step_sent_time) + td
                             time_str = dt.strftime("%H:%M") + " МСК"
@@ -382,7 +703,7 @@ async def get_step_command_handler(callback_query: CallbackQuery):
                             raise ValueError("Invalid next_step_delay type")
                         await bot.send_message(
                             user_id,
-                            settings["messages"]["next_step_timeout"].format(
+                            settings.messages("next_step_timeout").format(
                                 time=time_str
                             ),
                         )
@@ -394,7 +715,7 @@ async def get_step_command_handler(callback_query: CallbackQuery):
                     )
                 else:
                     await callback_query.answer(
-                        settings["messages"]["step_send_error"].format(
+                        settings.messages("step_send_error").format(
                             step_number=user.current_step,
                             id=user_id,
                         ),
@@ -408,30 +729,18 @@ async def get_step_command_handler(callback_query: CallbackQuery):
                     )
 
 
+@dp.message(F.text.startswith("/"))
+async def default_command_handler(message: Message):
+    user_id = message.from_user.id if message.from_user else None
+    logger.info(f"Got unknown command from user {user_id}: {message.text}")
+    await message.answer("Данная команда не существует или недоступна вам.")
+
+
 @dp.message()
 async def default_message_handler(message: Message):
-    if message.text:
-        id = message.from_user.id if message.from_user else "unknown"
-        logger.info(bms.on_message.format(id=id, text=message.text))
-        await message.answer(settings["messages"]["on_message"])
-    else:
-        user_id = message.from_user.id if message.from_user else None
-        if user_id:
-            with Session(engine) as session:
-                user = session.get(User, user_id)
-                if user and user.upload_mode:
-                    if message.photo:
-                        await message.reply(message.photo[-1].file_id)
-                    if message.video:
-                        await message.reply(message.video.file_id)
-                    if message.video_note:
-                        await message.reply(message.video_note.file_id)
-                    if message.document:
-                        await message.reply(message.document.file_id)
-                    if message.audio:
-                        await message.reply(message.audio.file_id)
-                    if message.voice:
-                        await message.reply(message.voice.file_id)
+    user_id = message.from_user.id if message.from_user else None
+    logger.info(bms.on_message.format(id=user_id, text=message.text))
+    await message.answer(settings.messages("on_message"))
 
 
 async def check_payments():
@@ -455,7 +764,7 @@ async def check_payments():
                             logger.info(bms.payment_confirmed.format(id=user.id))
                             await bot.send_message(
                                 chat_id=user.id,
-                                text=settings["messages"]["payment_successful"],
+                                text=settings.messages("payment_successful"),
                             )
                         elif status == "canceled":
                             user.payment_status = "canceled"
@@ -463,7 +772,7 @@ async def check_payments():
                             logger.info(bms.payment_canceled.format(id=user.id))
                             await bot.send_message(
                                 chat_id=user.id,
-                                text=settings["messages"]["payment_canceled"],
+                                text=settings.messages("payment_canceled"),
                             )
                         await asyncio.sleep(1)  # avoid hammering the payment API
                 else:
@@ -472,24 +781,22 @@ async def check_payments():
             logger.error(f"Failed to check payments: {e}")
 
 
-NEXT_STEP_KBD = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text=settings["messages"]["next_step_button"],
-                callback_data="get_step",
-            )
-        ]
-    ]
-)
-
-
 async def send_invite(user: User) -> bool:
     step = script[user.current_step]
+    NEXT_STEP_KBD = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=settings.messages("next_step_button"),
+                    callback_data="get_step",
+                )
+            ]
+        ]
+    )
     try:
         await bot.send_message(
             chat_id=user.id,
-            text=settings["messages"]["step_invite"].format(
+            text=settings.messages("step_invite").format(
                 title=step["title"],
                 description=step["description"],
                 step_number=user.current_step + 1,
@@ -555,17 +862,17 @@ async def invite_admins():
 async def update_next_steps():
     while True:
         try:
-            next_step_delay = settings["next_step_delay"]
-            if next_step_delay["type"] == "Period":
-                time_threshold = now() - next_step_delay["value"]
+            next_step_delay = settings.next_step_delay
+            if next_step_delay.type == "Period":
+                time_threshold = now() - next_step_delay.value
                 await send_invites(time_threshold)
-            if next_step_delay["type"] == "Fixed time":
+            if next_step_delay.type == "Fixed time":
                 utc_plus_3 = timezone(timedelta(hours=3))
                 now_dt = datetime.now(utc_plus_3)
                 start_of_day = now_dt.replace(
                     hour=0, minute=0, second=0, microsecond=0
                 ).timestamp()
-                time_threshold = start_of_day + next_step_delay["value"]
+                time_threshold = start_of_day + next_step_delay.value
                 if now() > time_threshold:
                     await send_invites(time_threshold)
                 else:
@@ -576,17 +883,18 @@ async def update_next_steps():
             logger.error(f"Failed to update next steps: {e}")
 
 
-async def reload_settings():
-    while True:
-        try:
-            global settings
-            global script
-            settings = json.load(open("settings.json", "r", encoding="utf-8"))
-            script = json.load(open("script.json", "r", encoding="utf-8"))
-            # logger.info("Settings reloaded")
-            await asyncio.sleep(10)  # reload every 10 seconds
-        except Exception as e:
-            logger.error(f"Failed to reload settings: {e}")
+# async def reload_settings():
+#     while True:
+#         try:
+#             global settings
+#             global script
+#             settings = json.load(open("settings.json", "r", encoding="utf-8"))
+#             script = json.load(open("script.json", "r", encoding="utf-8"))
+#             # logger.info("Settings reloaded")
+#             await asyncio.sleep(10)  # reload every 10 seconds
+#         except Exception as e:
+#             logger.error(f"Failed to reload settings: {e}")
+
 
 async def main():
     logger.info("Creating database tables")
@@ -595,8 +903,8 @@ async def main():
     asyncio.create_task(check_payments())
     logger.info("Starting next step update task")
     asyncio.create_task(update_next_steps())
-    logger.info("Starting settings reload task")
-    asyncio.create_task(reload_settings())
+    # logger.info("Starting settings reload task")
+    # asyncio.create_task(reload_settings())
     logger.info("Starting bot polling")
     await dp.start_polling(bot)
     logger.info("Bot has stopped")

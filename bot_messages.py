@@ -1,7 +1,7 @@
 from tabnanny import check
 
 
-not_registered = "User {id} tried to get step but is not registered"
+not_registered = "User {id} is not registered in db, but tried to {action}"
 not_payed = "User {id} tried to get step but has not paid"
 step_sent = "User {id} requested next step, but step already sent"
 script_completed = "User {id} has completed the script"
@@ -21,6 +21,7 @@ check_payment = "Checking payment status for user {id}"
 payment_confirmed = "Payment confirmed for user {id}"
 payment_canceled = "Payment was canceled for user {id}"
 upload_mode = "Upload mode is now {state}."
+login_attempt = "User {admin_id} attempted to log in as administrator."
 login_successful = "Admin {admin_id} logged in successfully."
 admin_logout = "Admin {admin_id} logged out."
 invalid_login = "Admin {admin_id} provided invalid login credentials."
@@ -34,3 +35,4 @@ not_authorized = "You are not authorized to perform this action."
 step_send_error = "Error sending step {step_number} to user {id}."
 progress_reset = "User {id} progress has been reset."
 created_admin = "Created user {id} with admin rights."
+promo_code_generated = "Generated promo code {code}."
