@@ -380,18 +380,21 @@ async def upload_command(message: Message):
 @dp.message(UploadModeFilter())
 async def upload_mode_handler(message: Message):
     logger.info(f"Received message in upload mode")
+    file_id = None
     if message.photo:
-        await message.reply(message.photo[-1].file_id)
+        file_id = message.photo[-1].file_id
     elif message.video:
-        await message.reply(message.video.file_id)
+        file_id = message.video.file_id
     elif message.video_note:
-        await message.reply(message.video_note.file_id)
+        file_id = message.video_note.file_id
     elif message.document:
-        await message.reply(message.document.file_id)
+        file_id = message.document.file_id
     elif message.audio:
-        await message.reply(message.audio.file_id)
+        file_id = message.audio.file_id
     elif message.voice:
-        await message.reply(message.voice.file_id)
+        file_id = message.voice.file_id
+    if file_id:
+        await message.reply(f"`{file_id}`", parse_mode="Markdown")
     else:
         await message.answer(settings.messages("upload_failed"))
 
