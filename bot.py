@@ -331,8 +331,7 @@ async def promo_code_entry_handler(message: Message, state: FSMContext):
                         json.dump(
                             promo_codes, open("promo_codes.json", "w", encoding="utf-8")
                         )
-                        await message.answer(settings.messages("promo_ok")
-                        )
+                        await message.answer(settings.messages("promo_ok"))
                         logger.info(
                             f"User {user_id} used promo code {entered_code} and is now registered."
                         )
@@ -349,9 +348,7 @@ async def promo_code_entry_handler(message: Message, state: FSMContext):
                         else:
                             await message.answer(
                                 settings.messages("promo error"),
-                                reply_markup=ForceReply(
-                                    input_field_placeholder="code"
-                                ),
+                                reply_markup=ForceReply(input_field_placeholder="code"),
                             )
                         logger.info(
                             f"User {user_id} entered invalid promo code {entered_code}."
@@ -432,9 +429,7 @@ async def admin_password_handler(message: Message, state: FSMContext):
                     user.payed = True
                     user.is_admin = True
                     session.commit()
-                    await message.answer(
-                        "Теперь у вас есть права администратора.\n\nВам доступны следующие команды:\n/upload - для загрузки файлов\n/logout - для выхода из режима администратора\n/get_step - для выбора и получения шага.\n/delete_me - для удаления своего id из БД\n/reset - для возврата к первому шагу\n/gen_promo - для генерации промокода"
-                    )
+                    await message.answer(settings.messages("login_successful"))
                     logger.info(bms.login_successful.format(admin_id=user_id))
                 await state.set_state(None)
                 await state.update_data(login_attempts=0)
@@ -547,7 +542,7 @@ async def delete_me_callback_handler(callback: CallbackQuery, state: FSMContext)
                 session.commit()
                 await bot.send_message(user_id, "Your account has been deleted.")
                 logger.info(f"User {user_id} account deleted from database.")
-        await state.set_state(None)
+        await state.clear()
     elif callback.data == "cancel_delete_me":
         await bot.send_message(callback.from_user.id, "Account deletion cancelled.")
         await state.set_state(None)
@@ -862,7 +857,6 @@ async def update_next_steps():
             await asyncio.sleep(1)
         except Exception as e:
             logger.error(f"Failed to update next steps: {e}")
-
 
 
 async def main():
