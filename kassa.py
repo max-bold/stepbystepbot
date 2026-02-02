@@ -1,4 +1,3 @@
-from time import sleep
 import uuid
 from dotenv import load_dotenv
 from os import getenv
@@ -7,15 +6,26 @@ load_dotenv()
 
 from yookassa import Configuration, Payment
 
-Configuration.account_id = getenv("STORE_ID")
-Configuration.secret_key = getenv("YKASSA_API_KEY")
+store_id = getenv("STORE_ID")
+api_key = getenv("YKASSA_API_KEY")
 bot_link = getenv("BOT_LINK")
 
+if not store_id:
+    raise ValueError("STORE_ID environment variable not set")
+if not api_key:
+    raise ValueError("YKASSA_API_KEY environment variable not set")
+if not bot_link:
+    raise ValueError("BOT_LINK environment variable not set")
 
-def create_payment() -> tuple[str, str]:
+Configuration.account_id = store_id
+Configuration.secret_key = api_key
+
+
+def create_payment(amount_rub: int) -> tuple[str, str]:
+    amount_value = f"{amount_rub:.2f}"
     payment = Payment.create(
         {
-            "amount": {"value": "100.00", "currency": "RUB"},
+            "amount": {"value": amount_value, "currency": "RUB"},
             "confirmation": {
                 "type": "redirect",
                 "return_url": bot_link,
