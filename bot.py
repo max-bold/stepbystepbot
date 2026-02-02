@@ -1,15 +1,10 @@
-from argparse import Action
-from ast import In
-from operator import call
-import os
-from typing import Any, Generator, Literal
+from typing import Any, Literal
 from sqlmodel import SQLModel, create_engine, Field, Session, select
-from sqlalchemy import BigInteger, exc
+from sqlalchemy import BigInteger
 from dotenv import load_dotenv
 from os import getenv
 import json
 import asyncio
-import shutil
 import secrets
 
 from aiogram import Bot, Dispatcher, F
@@ -18,26 +13,26 @@ from aiogram.types import (
     Message,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    FSInputFile,
     CallbackQuery,
     ForceReply,
 )
 
 import logging
 
-from streamlit import user
 from kassa import create_payment, get_payment_status
 
 import bot_messages as bms
-from datetime import datetime, timezone, timedelta, time
+from datetime import datetime, timezone, timedelta
 
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.filters import Filter
 
-from contextlib import contextmanager
-
-from time import monotonic
+import hashlib
+import secrets as secrets_lib
+from logging.handlers import TimedRotatingFileHandler
+from fastapi import FastAPI
+import uvicorn
 
 
 class AdminLogin(StatesGroup):
@@ -52,11 +47,17 @@ class DeleteAccount(StatesGroup):
     waiting_confirmation = State()
 
 
-logging.basicConfig(
-    filename="bot.log",
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
+log_handler = TimedRotatingFileHandler(
+    "bot.log",
+    when="midnight",
+    interval=1,
+    backupCount=7,
+    encoding="utf-8",
 )
+log_handler.setFormatter(
+    logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+)
+logging.basicConfig(level=logging.INFO, handlers=[log_handler])
 logger = logging.getLogger("bot")
 
 
@@ -97,7 +98,6 @@ dp = Dispatcher()
 class Settings:
     def __init__(self) -> None:
         self.settings = self._load()
-        self.reload_time = monotonic()
 
     def _dump(self) -> None:
         json.dump(self.settings, open("settings.json", "w", encoding="utf-8"))
@@ -107,24 +107,21 @@ class Settings:
             return json.load(open("settings.json", "r", encoding="utf-8"))
         except FileNotFoundError:
             logger.warning(
-                "settings.json not found, copied default_settings.json to settings.json"
+                "settings.json not found, using default_settings.json without writing"
             )
-            settings = json.load(open("default_settings.json", "r", encoding="utf-8"))
-            json.dump(settings, open("settings.json", "w", encoding="utf-8"))
-            return settings
+            return json.load(open("default_settings.json", "r", encoding="utf-8"))
 
-    def _reload(self) -> None:
-        if self.reload_time + 10 < monotonic():
-            self.settings = self._load()
-            self.reload_time = monotonic()
+    def reload(self) -> None:
+        self.settings = self._load()
 
     @property
     def create_paid_users(self) -> bool:
-        self._reload()
         if "create_paid_users" not in self.settings:
-            self.settings["create_paid_users"] = False
-            self._dump()
-        return self.settings["create_paid_users"]
+            logger.warning(
+                "Missing settings.create_paid_users; using default: False"
+            )
+            return False
+        return bool(self.settings["create_paid_users"])
 
     class NSD:
         def __init__(self, data: dict[str, Any]) -> None:
@@ -133,21 +130,36 @@ class Settings:
 
     @property
     def next_step_delay(self) -> NSD:
-        self._reload()
         if "next_step_delay" not in self.settings:
-            self.settings["next_step_delay"] = {"type": "Period", "value": 300}
-            self._dump()
+            logger.warning(
+                "Missing settings.next_step_delay; using default: Period/300"
+            )
+            return self.NSD({"type": "Period", "value": 300})
         return self.NSD(self.settings["next_step_delay"])
 
     def messages(self, key: str) -> str:
-        self._reload()
         if "messages" not in self.settings:
-            self.settings["messages"] = {}
-            self._dump()
+            logger.warning(
+                "Missing settings.messages; using default for key: %s",
+                key,
+            )
+            return f"Empty {key} message"
         if key not in self.settings["messages"]:
-            self.settings["messages"][key] = f"Empty {key} message"
-            self._dump()
+            default_message = f"Empty {key} message"
+            logger.warning(
+                "Missing settings.messages[%s]; using default: %s",
+                key,
+                default_message,
+            )
+            return default_message
         return self.settings["messages"][key]
+
+    @property
+    def payment_amount(self) -> int:
+        if "payment_amount" not in self.settings:
+            logger.warning("Missing settings.payment_amount; using default: 100")
+            return 100
+        return int(self.settings["payment_amount"])
 
 
 settings = Settings()
@@ -156,8 +168,6 @@ settings = Settings()
 class Script:
     def __init__(self) -> None:
         self.script = self._load()
-        self.reload_time = monotonic()
-        pass
 
     def _load(self) -> list[dict]:
         try:
@@ -168,13 +178,10 @@ class Script:
             logger.info("script.json not found, copied test_script.json to script.json")
             return script
 
-    def _reload(self):
-        if self.reload_time + 10 < monotonic():
-            self.settings = self._load()
-            self.reload_time = monotonic()
+    def reload(self) -> None:
+        self.script = self._load()
 
     def __getitem__(self, n):
-        self._reload()
         return self.script[n]
 
     def __len__(self):
@@ -217,23 +224,6 @@ class UserRegisteredFilter(Filter):
         return False
 
 
-@contextmanager
-def get_user(user_id: int) -> Generator[User, None, None]:
-    with Session(engine) as session:
-        user = session.get(User, user_id)
-        if not user:
-            user = User(id=user_id)
-            user.payed = settings.create_paid_users
-            session.add(user)
-            logger.info(f"Created user with id={user.id}")
-        try:
-            yield user
-            session.commit()
-        except:
-            session.rollback()
-            raise
-
-
 def now() -> float:
     """
     Get the current time in UTC+3 timezone as a timestamp.
@@ -243,6 +233,57 @@ def now() -> float:
     """
     utc_plus_3 = timezone(timedelta(hours=3))
     return datetime.now(utc_plus_3).timestamp()
+
+
+app = FastAPI()
+
+
+@app.post("/reload/settings")
+async def reload_settings() -> dict[str, str]:
+    settings.reload()
+    return {"status": "ok"}
+
+
+@app.post("/reload/script")
+async def reload_script() -> dict[str, str]:
+    script.reload()
+    return {"status": "ok"}
+
+
+@app.post("/promo/generate")
+async def generate_promo_code() -> dict[str, str]:
+    promo_code = secrets.token_urlsafe(8)
+    promo_codes.append(promo_code)
+    json.dump(promo_codes, open("promo_codes.json", "w", encoding="utf-8"))
+    logger.info(bms.promo_code_generated.format(code=promo_code))
+    return {"status": "ok", "code": promo_code}
+
+
+async def run_reload_api() -> None:
+    host = getenv("RELOAD_API_HOST", "0.0.0.0")
+    port = int(getenv("RELOAD_API_PORT", "8000"))
+    config = uvicorn.Config(app, host=host, port=port, log_level="info")
+    server = uvicorn.Server(config)
+    await server.serve()
+
+
+def _hash_password(password: str, salt: str) -> str:
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt.encode("utf-8"), 120000
+    ).hex()
+
+
+def is_admin_password_valid(password: str) -> bool:
+    password_hash = getenv("ADMIN_PASSWORD_HASH")
+    password_salt = getenv("ADMIN_PASSWORD_SALT")
+    if password_hash and password_salt:
+        return secrets_lib.compare_digest(
+            _hash_password(password, password_salt), password_hash
+        )
+    admin_password = getenv("ADMIN_PASSWORD")
+    if not admin_password:
+        return False
+    return secrets_lib.compare_digest(password, admin_password)
 
 
 @dp.message(CommandStart())
@@ -260,7 +301,9 @@ async def start_command_handler(message: Message):
             else:
                 logger.info(bms.user_exists.format(id=user.id))
             if not user.payed:
-                payment_id, confirmation_url = create_payment()
+                payment_id, confirmation_url = create_payment(
+                    settings.payment_amount
+                )
                 user.payment_key = payment_id
                 user.payment_status = "pending"
                 session.commit()
@@ -422,7 +465,7 @@ async def admin_password_handler(message: Message, state: FSMContext):
         if message.from_user and message.text:
             user_id = message.from_user.id
             entered_password = message.text.strip()
-            if entered_password == getenv("ADMIN_PASSWORD"):
+            if is_admin_password_valid(entered_password):
                 with Session(engine) as session:
                     user = session.get(User, user_id)
                     if not user:
@@ -865,6 +908,8 @@ async def update_next_steps():
 async def main():
     logger.info("Creating database tables")
     SQLModel.metadata.create_all(engine)
+    logger.info("Starting reload API")
+    asyncio.create_task(run_reload_api())
     logger.info("Starting payment checking task")
     asyncio.create_task(check_payments())
     logger.info("Starting next step update task")

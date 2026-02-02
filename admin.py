@@ -3,16 +3,58 @@ import json
 import datetime as dt
 from dotenv import load_dotenv
 import os
+import hashlib
+import secrets
+import requests
+import re
 
 load_dotenv()
 admin_password = os.getenv("ADMIN_PASSWORD")
+admin_password_hash = os.getenv("ADMIN_PASSWORD_HASH")
+admin_password_salt = os.getenv("ADMIN_PASSWORD_SALT")
+reload_api_url = os.getenv("RELOAD_API_URL", "http://localhost:8000")
+log_file_path = os.getenv("BOT_LOG_PATH", "bot.log")
+
+
+def _hash_password(password: str, salt: str) -> str:
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt.encode("utf-8"), 120000
+    ).hex()
+
+
+def is_admin_password_valid(password: str) -> bool:
+    if admin_password_hash and admin_password_salt:
+        return secrets.compare_digest(
+            _hash_password(password, admin_password_salt), admin_password_hash
+        )
+    if not admin_password:
+        return False
+    return secrets.compare_digest(password, admin_password)
+
+
+def notify_reload(endpoint: str) -> None:
+    try:
+        response = requests.post(f"{reload_api_url}{endpoint}", timeout=5)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        st.warning(f"Failed to notify bot about changes: {exc}")
+
+
+def request_promo_code() -> str | None:
+    try:
+        response = requests.post(f"{reload_api_url}/promo/generate", timeout=5)
+        response.raise_for_status()
+        return response.json().get("code")
+    except requests.RequestException as exc:
+        st.warning(f"Failed to generate promo code: {exc}")
+        return None
 
 if "logged_in" not in st.session_state or not st.session_state["logged_in"]:
     st.info("Please log in to access the admin panel.")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     if st.button("Log In"):
-        if username == "admin" and password == admin_password:
+        if username == "admin" and is_admin_password_valid(password):
             st.session_state["logged_in"] = True
             st.success("Logged in successfully!")
             st.rerun()
@@ -190,6 +232,7 @@ def steps_page():
             if st.button("Save All", type="primary"):
                 with open("script.json", "w", encoding="utf-8") as f:
                     json.dump(script, f, indent=4, ensure_ascii=False)
+                notify_reload("/reload/script")
                 st.session_state["changed"] = False
                 st.success("Changes saved successfully!")
                 st.rerun()
@@ -206,8 +249,12 @@ def setings_page():
         st.session_state["settings_changed"] = True
 
     if True:  # "settings" not in st.session_state:
-        with open("settings.json", "r", encoding="utf-8") as f:
-            st.session_state["settings"] = json.load(f)
+        try:
+            with open("settings.json", "r", encoding="utf-8") as f:
+                st.session_state["settings"] = json.load(f)
+        except FileNotFoundError:
+            with open("default_settings.json", "r", encoding="utf-8") as f:
+                st.session_state["settings"] = json.load(f)
     settings = st.session_state["settings"]
 
     st.title("Settings")
@@ -216,6 +263,13 @@ def setings_page():
         settings["create_paid_users"] = st.toggle(
             "Create paid users (for debugging)",
             settings["create_paid_users"],
+            on_change=settings_changed,
+        )
+        settings["payment_amount"] = st.number_input(
+            "Payment amount (RUB)",
+            min_value=1,
+            value=int(settings.get("payment_amount", 100)),
+            step=1,
             on_change=settings_changed,
         )
     with st.container(border=True):
@@ -265,9 +319,56 @@ def setings_page():
         if st.button("Save Settings", type="primary"):
             with open("settings.json", "w", encoding="utf-8") as f:
                 json.dump(settings, f, indent=4, ensure_ascii=False)
+            notify_reload("/reload/settings")
             st.session_state["settings"] = settings
             st.session_state["settings_changed"] = False
             st.rerun()
+
+
+def promo_codes_page():
+    st.title("Promo Codes")
+    st.write("Generate a new promo code using the bot API.")
+    if st.button("Generate promo code", type="primary"):
+        code = request_promo_code()
+        if code:
+            st.success("Promo code generated:")
+            st.code(code)
+
+
+def logs_page():
+    st.title("Bot Logs")
+    st.write(f"Log file: {log_file_path}")
+    st.caption("Logs are rotated daily by the bot (TimedRotatingFileHandler).")
+    st.button("Refresh logs", type="primary")
+    log_level = st.selectbox(
+        "Filter by level",
+        ["ALL", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        index=0,
+    )
+    try:
+        with open(log_file_path, "r", encoding="utf-8") as log_file:
+            lines = log_file.readlines()
+        if log_level != "ALL":
+            level_pattern = re.compile(rf" - {log_level} - ")
+            lines = [line for line in lines if level_pattern.search(line)]
+        log_preview = "".join(lines[-500:])
+        st.text_area("Latest logs", log_preview, height=500)
+    except FileNotFoundError:
+        st.warning("Log file not found.")
+    try:
+        log_dir = os.path.dirname(log_file_path) or "."
+        log_name = os.path.basename(log_file_path)
+        rotated = sorted(
+            [
+                fname
+                for fname in os.listdir(log_dir)
+                if fname.startswith(log_name + ".")
+            ]
+        )
+        if rotated:
+            st.caption(f"Rotated logs: {', '.join(rotated)}")
+    except OSError:
+        st.warning("Unable to list rotated logs.")
 
 
 if "logged_in" in st.session_state and st.session_state["logged_in"]:
@@ -275,6 +376,8 @@ if "logged_in" in st.session_state and st.session_state["logged_in"]:
         [
             st.Page(steps_page, title="Manage Steps"),
             st.Page(setings_page, title="Settings"),
+            st.Page(promo_codes_page, title="Promo Codes"),
+            st.Page(logs_page, title="Logs"),
         ],
         position="top",
     )

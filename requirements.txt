@@ -1,7 +1,10 @@
 aiogram
+fastapi
 python-dotenv
+requests
 SQLAlchemy
 sqlmodel
 streamlit
+uvicorn
 yookassa
 alembic
