@@ -4,6 +4,7 @@
         "type": "Fixed time",
         "value": 65400
     },
+    "payment_amount": 100,
     "messages": {
         "welcome_message": "Доступ к этому курсу стоит 4800 рублей. Оплатите, чтобы продолжить.",
         "step_invite": "Вам доступен новый шаг: {title}\n\n{description}",
