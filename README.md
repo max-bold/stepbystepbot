@@ -73,5 +73,4 @@ streamlit run admin.py --server.port 8501 --server.address 0.0.0.0
   настройки/сценарий без рестарта.
 - **Логи** ротируются ежедневно (`TimedRotatingFileHandler`).
 
-Подробнее про HTTP-ендпоинты см. в [api.md](api.md). 
- 32131
+Подробнее про HTTP-ендпоинты см. в [api.md](api.md).
