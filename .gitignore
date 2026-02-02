@@ -213,3 +213,7 @@ vps.md
 script.json
 settings.json
 promo_codes.json
+
+# Log files
+*.log
+*.log.*
