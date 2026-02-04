@@ -28,8 +28,7 @@
 ```bash
 # Бот (aiogram + reload API)
 tmux new -s bot
-source .venv/bin/activate
-export $(cat .env | xargs)
+source venv/bin/activate
 python bot.py
 # Ctrl+b d — выйти, не останавливая
 ```
@@ -37,9 +36,8 @@ python bot.py
 ```bash
 # Админка (Streamlit)
 tmux new -s admin
-source .venv/bin/activate
-export $(cat .env | xargs)
-streamlit run admin.py --server.port 8501 --server.address 0.0.0.0
+source venv/bin/activate
+streamlit run admin.py --server.port 8501 --server.address 127.0.0.1
 # Ctrl+b d — выйти, не останавливая
 ```
 

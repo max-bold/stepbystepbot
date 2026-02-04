@@ -457,6 +457,11 @@ async def login_command_handler(message: Message, state: FSMContext):
     if message.from_user:
         logger.info(bms.login_attempt.format(admin_id=message.from_user.id))
 
+@dp.message(Command("login"), AdminFilter())
+async def login_command_handler2(message: Message, state: FSMContext):
+    await message.answer(settings.messages("login_successful"))
+    if message.from_user:
+        logger.info(bms.login_attempt.format(admin_id=message.from_user.id))
 
 @dp.message(AdminLogin.waiting_password)
 async def admin_password_handler(message: Message, state: FSMContext):
