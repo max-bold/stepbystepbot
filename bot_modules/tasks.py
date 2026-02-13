@@ -7,6 +7,7 @@ from aiogram import Bot
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from sqlmodel import Session, select
 
 import bot_messages as bms
@@ -50,10 +51,17 @@ async def check_payments(bot: Bot):
 
 async def send_invite(user: User, bot: Bot) -> bool:
     step = script[user.current_step]
-    next_step_kbd = [[{"text": settings.messages("next_step_button"), "callback_data": "get_step"}]]
+    next_step_kbd = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=settings.messages("next_step_button"),
+                    callback_data="get_step",
+                )
+            ]
+        ]
+    )
     try:
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-
         await bot.send_message(
             chat_id=user.id,
             text=settings.messages("step_invite").format(
@@ -61,9 +69,7 @@ async def send_invite(user: User, bot: Bot) -> bool:
                 description=step["description"],
                 step_number=user.current_step + 1,
             ),
-            reply_markup=InlineKeyboardMarkup(
-                inline_keyboard=[[InlineKeyboardButton(**next_step_kbd[0][0])]]
-            ),
+            reply_markup=next_step_kbd,
         )
         return True
     except Exception as e:
