@@ -5,11 +5,9 @@ from aiogram import Bot
 from sqlmodel import SQLModel
 
 from bot_modules.api import run_reload_api
-from bot_modules.runtime import bot_key, dp, engine, logger, proxy_url
+from bot_modules.handlers import dp
+from bot_modules.runtime import bot_key, engine, logger, proxy_url
 from bot_modules.tasks import SocksAiohttpSession, check_payments, update_next_steps
-
-# side-effect import for registering handlers on dispatcher
-import bot_modules.handlers  # noqa: F401
 
 
 async def start_admin_panel() -> asyncio.subprocess.Process | None:

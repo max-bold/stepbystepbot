@@ -13,9 +13,9 @@ from sqlmodel import Session, select
 from bot_modules import bot_messages as bms
 from kassa import get_payment_status
 from bot_modules.config import script, settings
-from bot_modules.handlers import CreatePayment, send_step_content
+from bot_modules.handlers import CreatePayment, dp, send_step_content
 from bot_modules.models import User
-from bot_modules.runtime import dp, engine, logger
+from bot_modules.runtime import engine, logger
 from bot_modules.utils import now
 
 

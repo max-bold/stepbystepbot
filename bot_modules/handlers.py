@@ -2,7 +2,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Any
 
-from aiogram import Bot, F
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart, Filter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -21,8 +21,11 @@ from aiogram.fsm.state import State, StatesGroup
 
 from bot_modules.config import script, settings
 from bot_modules.models import User
-from bot_modules.runtime import dp, engine, logger, promo_codes, save_promo_codes
+from bot_modules.runtime import engine, logger, promo_codes, save_promo_codes
 from bot_modules.utils import is_admin_password_valid, now
+
+
+dp = Dispatcher()
 
 
 class AdminLogin(StatesGroup):

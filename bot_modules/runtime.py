@@ -5,7 +5,6 @@ from logging.handlers import TimedRotatingFileHandler
 
 from dotenv import load_dotenv
 from sqlmodel import create_engine
-from aiogram import Dispatcher
 
 
 log_handler = TimedRotatingFileHandler(
@@ -41,5 +40,3 @@ except FileNotFoundError:
 def save_promo_codes() -> None:
     json.dump(promo_codes, open("promo_codes.json", "w", encoding="utf-8"))
 
-
-dp = Dispatcher()
