@@ -15,7 +15,7 @@ from aiogram.types import (
 from email_validator import EmailNotValidError, validate_email
 from sqlmodel import Session
 
-import bot_messages as bms
+from bot_modules import bot_messages as bms
 from kassa import create_payment
 from aiogram.fsm.state import State, StatesGroup
 

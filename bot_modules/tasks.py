@@ -10,7 +10,7 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from sqlmodel import Session, select
 
-import bot_messages as bms
+from bot_modules import bot_messages as bms
 from kassa import get_payment_status
 from bot_modules.config import script, settings
 from bot_modules.handlers import CreatePayment, send_step_content

@@ -3,7 +3,7 @@ from os import getenv
 import uvicorn
 from fastapi import FastAPI
 
-import bot_messages as bms
+from bot_modules import bot_messages as bms
 from bot_modules.config import script, settings
 from bot_modules.runtime import logger, promo_codes, save_promo_codes
 
