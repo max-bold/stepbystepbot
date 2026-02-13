@@ -1,6 +1,4 @@
 import asyncio
-from contextlib import suppress
-
 from aiogram import Bot
 from sqlmodel import SQLModel
 
@@ -12,35 +10,12 @@ from dotenv import load_dotenv
 
 from bot_modules.db import engine
 from bot_modules.logger import logger
+from admin import start_admin_panel, stop_admin_panel
 from bot_modules.tasks import SocksAiohttpSession, check_payments, update_next_steps
 
 load_dotenv()
 bot_key = getenv("BOT_KEY")
 proxy_url = getenv("PROXY_URL")
-
-
-async def start_admin_panel() -> asyncio.subprocess.Process | None:
-    try:
-        process = await asyncio.create_subprocess_exec(
-            "streamlit",
-            "run",
-            "admin.py",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        logger.info("Admin panel started")
-        return process
-    except FileNotFoundError:
-        logger.warning("streamlit is not installed; admin panel was not started")
-        return None
-
-
-async def stop_admin_panel(process: asyncio.subprocess.Process | None) -> None:
-    if process is None or process.returncode is not None:
-        return
-    process.terminate()
-    with suppress(ProcessLookupError):
-        await process.wait()
 
 
 async def main():

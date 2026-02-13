@@ -1,3 +1,4 @@
+import asyncio
 import streamlit as st
 import json
 import datetime as dt
@@ -14,6 +15,27 @@ admin_password_hash = os.getenv("ADMIN_PASSWORD_HASH")
 admin_password_salt = os.getenv("ADMIN_PASSWORD_SALT")
 reload_api_url = os.getenv("RELOAD_API_URL", "http://localhost:8000")
 log_file_path = os.getenv("BOT_LOG_PATH", "bot.log")
+
+
+async def start_admin_panel() -> asyncio.subprocess.Process | None:
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "streamlit",
+            "run",
+            "admin.py",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        return process
+    except FileNotFoundError:
+        return None
+
+
+async def stop_admin_panel(process: asyncio.subprocess.Process | None) -> None:
+    if process is None or process.returncode is not None:
+        return
+    process.terminate()
+    await process.wait()
 
 
 def _hash_password(password: str, salt: str) -> str:
@@ -50,17 +72,18 @@ def request_promo_code() -> str | None:
         return None
 
 
-if "logged_in" not in st.session_state or not st.session_state["logged_in"]:
-    st.info("Please log in to access the admin panel.")
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-    if st.button("Log In"):
-        if username == "admin" and is_admin_password_valid(password):
-            st.session_state["logged_in"] = True
-            st.success("Logged in successfully!")
-            st.rerun()
-        else:
-            st.error("Invalid credentials. Please try again.")
+def render_login_form() -> None:
+    if "logged_in" not in st.session_state or not st.session_state["logged_in"]:
+        st.info("Please log in to access the admin panel.")
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        if st.button("Log In"):
+            if username == "admin" and is_admin_password_valid(password):
+                st.session_state["logged_in"] = True
+                st.success("Logged in successfully!")
+                st.rerun()
+            else:
+                st.error("Invalid credentials. Please try again.")
 
 
 def steps_page():
@@ -391,14 +414,21 @@ def logs_page():
         st.warning("Unable to list rotated logs.")
 
 
-if "logged_in" in st.session_state and st.session_state["logged_in"]:
-    page = st.navigation(
-        [
-            st.Page(steps_page, title="Manage Steps"),
-            st.Page(setings_page, title="Settings"),
-            st.Page(promo_codes_page, title="Promo Codes"),
-            st.Page(logs_page, title="Logs"),
-        ],
-        position="top",
-    )
-    page.run()
+def run_admin_app() -> None:
+    render_login_form()
+
+    if "logged_in" in st.session_state and st.session_state["logged_in"]:
+        page = st.navigation(
+            [
+                st.Page(steps_page, title="Manage Steps"),
+                st.Page(setings_page, title="Settings"),
+                st.Page(promo_codes_page, title="Promo Codes"),
+                st.Page(logs_page, title="Logs"),
+            ],
+            position="top",
+        )
+        page.run()
+
+
+if __name__ == "__main__":
+    run_admin_app()
