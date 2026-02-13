@@ -21,7 +21,11 @@ Configuration.account_id = store_id
 Configuration.secret_key = api_key
 
 
-def create_payment(amount_rub: int) -> tuple[str, str]:
+def create_payment(
+    amount_rub: int,
+    item_name: str = "Доступ к сервису",
+    email: str = "user@example.com",
+) -> tuple[str, str]:
     amount_value = f"{amount_rub:.2f}"
     payment = Payment.create(
         {
@@ -32,10 +36,25 @@ def create_payment(amount_rub: int) -> tuple[str, str]:
             },
             "capture": True,
             "description": "Оплата заказа в StepByStepBot",
+            "receipt": {
+                "customer": {"email": email},
+                "items": [
+                    {
+                        "description": item_name,
+                        "quantity": 1.000,
+                        "amount": {"value": amount_value, "currency": "RUB"},
+                        "vat_code": 1,
+                        "payment_mode": "full_prepayment",
+                        "payment_subject": "intellectual_activity",
+                    }
+                ],
+            },
         },
         uuid.uuid4(),
     )
-    return payment.id, payment.confirmation.confirmation_url
+    return str(payment.id), (
+        payment.confirmation.confirmation_url if payment.confirmation else ""
+    )
 
 
 def get_payment_status(payment_id: str) -> str | None:

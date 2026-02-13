@@ -26,6 +26,8 @@ from datetime import datetime, timezone, timedelta
 
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey
+
 from aiogram.filters import Filter
 
 import hashlib
@@ -33,6 +35,8 @@ import secrets as secrets_lib
 from logging.handlers import TimedRotatingFileHandler
 from fastapi import FastAPI
 import uvicorn
+
+from email_validator import validate_email, EmailNotValidError
 
 
 class AdminLogin(StatesGroup):
@@ -45,6 +49,11 @@ class PromoCodeEntry(StatesGroup):
 
 class DeleteAccount(StatesGroup):
     waiting_confirmation = State()
+
+
+class CreatePayment(StatesGroup):
+    waiting_email = State()
+    waiting_payment = State()
 
 
 log_handler = TimedRotatingFileHandler(
@@ -71,6 +80,7 @@ class User(SQLModel, table=True):
     next_step_invite_sent: bool = Field(default=False)
     upload_mode: bool = Field(default=False)
     is_admin: bool = Field(default=False)
+    email: str = Field(default="")
 
 
 load_dotenv()
@@ -117,9 +127,7 @@ class Settings:
     @property
     def create_paid_users(self) -> bool:
         if "create_paid_users" not in self.settings:
-            logger.warning(
-                "Missing settings.create_paid_users; using default: False"
-            )
+            logger.warning("Missing settings.create_paid_users; using default: False")
             return False
         return bool(self.settings["create_paid_users"])
 
@@ -139,17 +147,12 @@ class Settings:
 
     def messages(self, key: str) -> str:
         if "messages" not in self.settings:
-            logger.warning(
-                "Missing settings.messages; using default for key: %s",
-                key,
-            )
-            return f"Empty {key} message"
+            logger.warning(f"Missing settings.messages; using default for key: {key}")
+            return f"Empty `{key}` message"
         if key not in self.settings["messages"]:
-            default_message = f"Empty {key} message"
+            default_message = f"Empty `{key}` message"
             logger.warning(
-                "Missing settings.messages[%s]; using default: %s",
-                key,
-                default_message,
+                f"Missing settings.messages[{key}]; using default: {default_message}"
             )
             return default_message
         return self.settings["messages"][key]
@@ -160,6 +163,15 @@ class Settings:
             logger.warning("Missing settings.payment_amount; using default: 100")
             return 100
         return int(self.settings["payment_amount"])
+
+    @property
+    def goods_name(self) -> str:
+        if "goods_name" not in self.settings:
+            logger.warning(
+                "Missing settings.goods_name; using default: 'Доступ к сервису'"
+            )
+            return "No goods name"
+        return str(self.settings["goods_name"])
 
 
 settings = Settings()
@@ -220,7 +232,7 @@ class UserRegisteredFilter(Filter):
             with Session(engine) as session:
                 user = session.get(User, user_id)
                 if user:
-                    return True
+                    return {"user": user}
         return False
 
 
@@ -301,19 +313,19 @@ async def start_command_handler(message: Message):
             else:
                 logger.info(bms.user_exists.format(id=user.id))
             if not user.payed:
-                payment_id, confirmation_url = create_payment(
-                    settings.payment_amount
-                )
-                user.payment_key = payment_id
-                user.payment_status = "pending"
-                session.commit()
-                logger.info(f"Created payment {payment_id} for user {user.id}")
+                # payment_id, confirmation_url = create_payment(
+                #     settings.payment_amount
+                # )
+                # user.payment_key = payment_id
+                # user.payment_status = "pending"
+                # session.commit()
+                # logger.info(f"Created payment {payment_id} for user {user.id}")
                 keyboard = InlineKeyboardMarkup(
                     inline_keyboard=[
                         [
                             InlineKeyboardButton(
                                 text=settings.messages("pay_button_text"),
-                                url=confirmation_url,
+                                callback_data="enter_email",
                             )
                         ],
                         [
@@ -328,7 +340,7 @@ async def start_command_handler(message: Message):
                     settings.messages("welcome_message"),
                     reply_markup=keyboard,
                 )
-                logger.info(bms.pay_link_sent.format(id=user.id))
+                logger.info(f"New user registered: {user.id}")
             else:
                 await message.answer(settings.messages("already_registered"))
                 logger.info(bms.wlc_back.format(id=user.id))
@@ -354,6 +366,75 @@ async def enter_promo_code_handler(callback_query: CallbackQuery, state: FSMCont
                 settings.messages("promo limit reached"),
             )
     await callback_query.answer()
+
+
+# Handle `enter_email` callback query
+@dp.callback_query(F.data == "enter_email")
+async def enter_email_handler(callback_query: CallbackQuery, state: FSMContext):
+    if callback_query.from_user:
+        user_id = callback_query.from_user.id
+        await bot.send_message(
+            user_id,
+            settings.messages("email prompt"),
+            reply_markup=ForceReply(input_field_placeholder="email"),
+        )
+        await state.set_state(CreatePayment.waiting_email)
+    await callback_query.answer()
+
+
+# Handle email entry
+@dp.message(CreatePayment.waiting_email)
+async def email_entry_handler(message: Message, state: FSMContext):
+    if message.from_user and message.text:
+        user_id = message.from_user.id
+        email = message.text.strip()
+        try:
+            validate_email(email)
+            with Session(engine) as session:
+                user = session.get(User, user_id)
+                if user:
+                    user.email = email
+                    session.commit()
+                    logger.info(f"User {user_id} provided email: {email}")
+                    await state.set_state(CreatePayment.waiting_payment)
+                    payment_id, confirmation_url = create_payment(
+                        settings.payment_amount, settings.goods_name, email
+                    )
+                    user.payment_key = payment_id
+                    user.payment_status = "pending"
+                    session.commit()
+                    logger.info(f"Created payment {payment_id} for user {user.id}")
+                    keyboard = InlineKeyboardMarkup(
+                        inline_keyboard=[
+                            [
+                                InlineKeyboardButton(
+                                    text=settings.messages("pay_button_text"),
+                                    url=confirmation_url,
+                                )
+                            ],
+                        ]
+                    )
+                    await message.answer(
+                        settings.messages("go to yookassa"), reply_markup=keyboard
+                    )
+        except EmailNotValidError:
+            await message.answer(
+                settings.messages("invalid_email"),
+                reply_markup=ForceReply(input_field_placeholder="email"),
+            )
+            logger.info(f"User {user_id} entered invalid email: {email}")
+    else:
+        logger.warning(bms.no_user_id)
+
+
+# Handle all messages in CreatePayment.waiting_payment state
+@dp.message(CreatePayment.waiting_payment, UserRegisteredFilter())
+async def handle_waiting_payment(message: Message, state: FSMContext, user: User):
+    logger.info(
+        f"Received message {message.text} in CreatePayment.waiting_payment state for user {message.from_user.id if message.from_user else None}"
+    )
+    if not user.payed:
+        await message.answer(settings.messages("payment_pending"))
 
 
 # Handle promo code entry
@@ -457,11 +538,13 @@ async def login_command_handler(message: Message, state: FSMContext):
     if message.from_user:
         logger.info(bms.login_attempt.format(admin_id=message.from_user.id))
 
+
 @dp.message(Command("login"), AdminFilter())
 async def login_command_handler2(message: Message, state: FSMContext):
     await message.answer(settings.messages("login_successful"))
     if message.from_user:
         logger.info(bms.login_attempt.format(admin_id=message.from_user.id))
+
 
 @dp.message(AdminLogin.waiting_password)
 async def admin_password_handler(message: Message, state: FSMContext):
@@ -793,6 +876,10 @@ async def check_payments():
                                 chat_id=user.id,
                                 text=settings.messages("payment_successful"),
                             )
+                            key = StorageKey(bot.id, user.id, user.id)
+                            fsm = FSMContext(dp.storage, key)
+                            if await fsm.get_state() == CreatePayment.waiting_payment:
+                                await fsm.set_state(None)
                         elif status == "canceled":
                             user.payment_status = "canceled"
                             session.commit()

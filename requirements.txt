@@ -8,3 +8,4 @@ streamlit
 uvicorn
 yookassa
 alembic
+email-validator
