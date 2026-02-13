@@ -28,7 +28,7 @@ async def check_payments(bot: Bot):
                 ).all()
                 if users:
                     for user in users:
-                        status = get_payment_status(user.payment_key)
+                        status = await get_payment_status(user.payment_key)
                         if status == "succeeded":
                             user.payed = True
                             user.payment_status = "succeeded"

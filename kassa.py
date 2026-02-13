@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from dotenv import load_dotenv
 from os import getenv
@@ -57,9 +58,12 @@ def create_payment(
     )
 
 
-def get_payment_status(payment_id: str) -> str | None:
+def _get_payment_status_sync(payment_id: str) -> str | None:
     payment = Payment.find_one(payment_id)
     if payment is None:
         return None
-    else:
-        return payment.status
+    return payment.status
+
+
+async def get_payment_status(payment_id: str) -> str | None:
+    return await asyncio.to_thread(_get_payment_status_sync, payment_id)
