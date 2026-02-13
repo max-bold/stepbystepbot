@@ -39,6 +39,11 @@ import uvicorn
 from email_validator import validate_email, EmailNotValidError
 
 
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiohttp_socks import ProxyConnector
+from aiohttp import ClientSession
+
+
 class AdminLogin(StatesGroup):
     waiting_password = State()
 
@@ -82,26 +87,24 @@ class User(SQLModel, table=True):
     is_admin: bool = Field(default=False)
     email: str = Field(default="")
 
-
+# Load envs
 load_dotenv()
+
 db_url = getenv("DB_URL")
 bot_key = getenv("BOT_KEY")
+proxy_url = getenv("PROXY_URL")
 
 if db_url is None:
     raise ValueError("DB_URL environment variable not set")
-
-if bot_key is None:
-    raise ValueError("BOT_KEY environment variable not set")
-
 engine = create_engine(db_url)
 
+# Load promo codes
 try:
     promo_codes: list[str] = json.load(open("promo_codes.json", "r", encoding="utf-8"))
 except FileNotFoundError:
     promo_codes: list[str] = []
 
 
-bot = Bot(token=bot_key)
 dp = Dispatcher()
 
 
@@ -350,7 +353,7 @@ async def start_command_handler(message: Message):
 
 # Handle `enter_promo_code` callback query
 @dp.callback_query(F.data == "enter_promo_code")
-async def enter_promo_code_handler(callback_query: CallbackQuery, state: FSMContext):
+async def enter_promo_code_handler(callback_query: CallbackQuery, state: FSMContext, bot: Bot):
     if callback_query.from_user:
         if await state.get_value("promo_attempts", 0) < 3:
             user_id = callback_query.from_user.id
@@ -370,7 +373,7 @@ async def enter_promo_code_handler(callback_query: CallbackQuery, state: FSMCont
 
 # Handle `enter_email` callback query
 @dp.callback_query(F.data == "enter_email")
-async def enter_email_handler(callback_query: CallbackQuery, state: FSMContext):
+async def enter_email_handler(callback_query: CallbackQuery, state: FSMContext, bot: Bot):
     if callback_query.from_user:
         user_id = callback_query.from_user.id
         await bot.send_message(
@@ -666,7 +669,7 @@ async def delete_me_command_handler(message: Message, state: FSMContext):
 
 
 @dp.callback_query(DeleteAccount.waiting_confirmation)
-async def delete_me_callback_handler(callback: CallbackQuery, state: FSMContext):
+async def delete_me_callback_handler(callback: CallbackQuery, state: FSMContext,bot: Bot):
     if callback.data == "confirm_delete_me":
         user_id = callback.from_user.id
         with Session(engine) as session:
@@ -693,7 +696,7 @@ async def gen_promo_command_handler(message: Message):
     logger.info(bms.promo_code_generated.format(code=promo_code))
 
 
-async def send_step_content(user_id: int, step_number: int) -> bool:
+async def send_step_content(user_id: int, step_number: int,bot: Bot) -> bool:
     errors = False
     for content in script[step_number]["content"]:
         try:
@@ -732,7 +735,7 @@ async def send_step_content(user_id: int, step_number: int) -> bool:
 
 
 @dp.callback_query(F.data.startswith("admin_get_step="))
-async def admin_get_step_handler(callback_query: CallbackQuery):
+async def admin_get_step_handler(callback_query: CallbackQuery, bot: Bot):
     if callback_query.from_user and callback_query.data:
         user_id = callback_query.from_user.id
         step_number = int(callback_query.data.split("=")[1])
@@ -745,7 +748,7 @@ async def admin_get_step_handler(callback_query: CallbackQuery):
         with Session(engine) as session:
             user = session.get(User, user_id)
             if user and user.is_admin:
-                await send_step_content(user_id, step_number)
+                await send_step_content(user_id, step_number, bot)
                 await callback_query.answer()
                 logger.info(
                     bms.sent_step_to_admin.format(
@@ -764,7 +767,7 @@ async def empty_button_handler(callback_query: CallbackQuery):
 
 
 @dp.callback_query(F.data == "get_step")
-async def get_step_command_handler(callback_query: CallbackQuery):
+async def get_step_command_handler(callback_query: CallbackQuery,bot: Bot):
     if callback_query.from_user:
         user_id = callback_query.from_user.id
         logger.info(bms.next_request.format(id=user_id))
@@ -789,7 +792,7 @@ async def get_step_command_handler(callback_query: CallbackQuery):
                 logger.info(bms.script_completed.format(id=user_id))
                 return
             else:
-                if await send_step_content(user_id, user.current_step):
+                if await send_step_content(user_id, user.current_step,bot):
                     user.step_sent_time = now()
                     user.next_step_invite_sent = False
                     user.current_step += 1
@@ -853,7 +856,7 @@ async def default_message_handler(message: Message):
     await message.answer(settings.messages("on_message"))
 
 
-async def check_payments():
+async def check_payments(bot: Bot):
     while True:
         try:
             with Session(engine) as session:
@@ -895,7 +898,7 @@ async def check_payments():
             logger.error(f"Failed to check payments: {e}")
 
 
-async def send_invite(user: User) -> bool:
+async def send_invite(user: User, bot: Bot) -> bool:
     step = script[user.current_step]
     NEXT_STEP_KBD = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -924,7 +927,7 @@ async def send_invite(user: User) -> bool:
         return False
 
 
-async def send_invites(time_threshold: float):
+async def send_invites(time_threshold: float, bot: Bot):
     with Session(engine) as session:
         users = session.exec(
             select(User).where(
@@ -935,13 +938,13 @@ async def send_invites(time_threshold: float):
             )
         ).all()
         for user in users:
-            if await send_invite(user):
+            if await send_invite(user,bot):
                 user.next_step_invite_sent = True
                 user.step_sent_time = 0.0
                 session.commit()
 
 
-async def invite_zero_steppers():
+async def invite_zero_steppers(bot: Bot):
     with Session(engine) as session:
         users = session.exec(
             select(User).where(
@@ -951,13 +954,13 @@ async def invite_zero_steppers():
             )
         ).all()
         for user in users:
-            if await send_invite(user):
+            if await send_invite(user,bot):
                 user.next_step_invite_sent = True
                 user.step_sent_time = 0.0
                 session.commit()
 
 
-async def invite_admins():
+async def invite_admins(bot: Bot):
     with Session(engine) as session:
         users = session.exec(
             select(User).where(
@@ -967,19 +970,19 @@ async def invite_admins():
             )
         ).all()
         for user in users:
-            if await send_invite(user):
+            if await send_invite(user,bot):
                 user.next_step_invite_sent = True
                 user.step_sent_time = 0.0
                 session.commit()
 
 
-async def update_next_steps():
+async def update_next_steps(bot: Bot):
     while True:
         try:
             next_step_delay = settings.next_step_delay
             if next_step_delay.type == "Period":
                 time_threshold = now() - next_step_delay.value
-                await send_invites(time_threshold)
+                await send_invites(time_threshold, bot)
             if next_step_delay.type == "Fixed time":
                 utc_plus_3 = timezone(timedelta(hours=3))
                 now_dt = datetime.now(utc_plus_3)
@@ -988,25 +991,45 @@ async def update_next_steps():
                 ).timestamp()
                 time_threshold = start_of_day + next_step_delay.value
                 if now() > time_threshold:
-                    await send_invites(time_threshold)
+                    await send_invites(time_threshold, bot)
                 else:
-                    await invite_zero_steppers()
-            await invite_admins()
+                    await invite_zero_steppers(bot)
+            await invite_admins(bot)
             await asyncio.sleep(1)
         except Exception as e:
             logger.error(f"Failed to update next steps: {e}")
 
+class SocksAiohttpSession(AiohttpSession):
+    def __init__(self, *, proxy_url: str, **kwargs):
+        super().__init__(**kwargs)
+        self._proxy_url = proxy_url
+
+    async def create_session(self) -> ClientSession:
+        connector = ProxyConnector.from_url(self._proxy_url)
+        return ClientSession(connector=connector)
 
 async def main():
+    if bot_key is None:
+        raise ValueError("BOT_KEY environment variable not set")
+    
+    if proxy_url:
+        tg_session = SocksAiohttpSession(proxy_url=proxy_url)  
+        bot = Bot(bot_key, tg_session)
+    else:
+        bot = Bot(bot_key)
+
     logger.info("Creating database tables")
     SQLModel.metadata.create_all(engine)
     logger.info("Starting reload API")
     asyncio.create_task(run_reload_api())
     logger.info("Starting payment checking task")
-    asyncio.create_task(check_payments())
+    asyncio.create_task(check_payments(bot))
     logger.info("Starting next step update task")
-    asyncio.create_task(update_next_steps())
+    asyncio.create_task(update_next_steps(bot))
     logger.info("Starting bot polling")
+    
+    
+
     await dp.start_polling(bot)
     logger.info("Bot has stopped")
 

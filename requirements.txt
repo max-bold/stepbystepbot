@@ -9,3 +9,5 @@ uvicorn
 yookassa
 alembic
 email-validator
+aiohttp_socks
+aiohttp
