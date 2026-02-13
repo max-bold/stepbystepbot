@@ -8,23 +8,19 @@
 
 1. Установите зависимости:
    ```bash
-   python -m venv .venv
-   source .venv/bin/activate
+   python -m venv venv
+   source venv/bin/activate
    pip install -r requirements.txt
    ```
 2. Скопируйте шаблон переменных окружения и заполните:
    ```bash
    cp .env.example .env
    ```
-3. Подготовьте базу данных (пример для PostgreSQL):
-   ```bash
-   export DB_URL="postgresql+psycopg://user:pass@localhost:5432/stepbystep"
-   ```
 
 ## Запуск
 
 ```bash
-source .venv/bin/activate
+source venv/bin/activate
 python bot.py
 ```
 
@@ -61,6 +57,7 @@ python bot.py
 - `RELOAD_API_PORT` — порт reload API (по умолчанию `8000`).
 - `RELOAD_API_URL` — URL для админки, чтобы дергать reload/promo API.
 - `BOT_LOG_PATH` — путь к файлу логов (для админки).
+- `PROXY_URL = "socks5://user:password@host:port"` — (опционально) SOCKS5 прокси для запросов к TelegramAPI
 
 ## Основные принципы работы
 
