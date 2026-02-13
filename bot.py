@@ -1003,10 +1003,33 @@ class SocksAiohttpSession(AiohttpSession):
     def __init__(self, *, proxy_url: str, **kwargs):
         super().__init__(**kwargs)
         self._proxy_url = proxy_url
+        self._connector: ProxyConnector | None = None
+        self._client: ClientSession | None = None
 
     async def create_session(self) -> ClientSession:
-        connector = ProxyConnector.from_url(self._proxy_url)
-        return ClientSession(connector=connector)
+        # Создаём один раз и переиспользуем
+        if self._client and not self._client.closed:
+            return self._client
+
+        if self._connector is None:
+            self._connector = ProxyConnector.from_url(self._proxy_url)
+
+        self._client = ClientSession(connector=self._connector)
+        return self._client
+
+    async def close(self) -> None:
+        # Закрываем клиентскую сессию
+        if self._client and not self._client.closed:
+            await self._client.close()
+        self._client = None
+
+        # Закрываем коннектор (на всякий случай)
+        if self._connector is not None:
+            await self._connector.close()
+        self._connector = None
+
+        await super().close()
+
 
 async def main():
     if bot_key is None:
@@ -1029,8 +1052,11 @@ async def main():
     logger.info("Starting bot polling")
     
     
-
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
+        
     logger.info("Bot has stopped")
 
 
