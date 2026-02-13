@@ -1,6 +1,3 @@
-from tabnanny import check
-
-
 not_registered = "User {id} is not registered in db, but tried to {action}"
 not_payed = "User {id} tried to get step but has not paid"
 step_sent = "User {id} requested next step, but step already sent"

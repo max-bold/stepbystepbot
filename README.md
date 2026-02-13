@@ -21,25 +21,30 @@
    export DB_URL="postgresql+psycopg://user:pass@localhost:5432/stepbystep"
    ```
 
-## Запуск (tmux)
-
-Пример запуска бота и админки в отдельных tmux-сессиях:
+## Запуск
 
 ```bash
-# Бот (aiogram + reload API)
-tmux new -s bot
-source venv/bin/activate
+source .venv/bin/activate
 python bot.py
-# Ctrl+b d — выйти, не останавливая
 ```
 
-```bash
-# Админка (Streamlit)
-tmux new -s admin
-source venv/bin/activate
-streamlit run admin.py --server.port 8501 --server.address 127.0.0.1
-# Ctrl+b d — выйти, не останавливая
-```
+`bot.py` теперь поднимает сразу:
+- Telegram-бота (aiogram),
+- Reload API (FastAPI),
+- фоновые задачи (проверка платежей/инвайты),
+- админку Streamlit (`admin.py`) как дочерний процесс.
+
+## Структура проекта (после рефакторинга)
+
+- `bot.py` — точка входа и оркестрация сервисов.
+- `bot_modules/logger.py` — настройка логгера и `logger`.
+- `bot_modules/db.py` — загрузка `.env` для DB, `engine`, SQLModel-модели.
+- `bot_modules/promo.py` — загрузка/сохранение промокодов.
+- `bot_modules/config.py` — `Settings` и `Script`.
+- `bot_modules/handlers.py` — фильтры, FSM-состояния и хендлеры aiogram.
+- `bot_modules/tasks.py` — фоновые задачи и прокси-сессия.
+- `bot_modules/api.py` — FastAPI-ендпоинты для reload/promo.
+- `bot_modules/bot_messages.py` — шаблоны лог-сообщений.
 
 ## Структура `.env`
 
