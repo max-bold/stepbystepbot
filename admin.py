@@ -49,6 +49,7 @@ def request_promo_code() -> str | None:
         st.warning(f"Failed to generate promo code: {exc}")
         return None
 
+
 if "logged_in" not in st.session_state or not st.session_state["logged_in"]:
     st.info("Please log in to access the admin panel.")
     username = st.text_input("Username")
@@ -272,6 +273,11 @@ def setings_page():
             step=1,
             on_change=settings_changed,
         )
+        settings["goods_name"] = st.text_input(
+            "Название товара (для чека)",
+            value=settings.get("goods_name", ""),
+            on_change=settings_changed,
+        )
     with st.container(border=True):
         st.text("Notifications Settings")
         settings["next_step_delay"]["type"] = st.selectbox(
@@ -312,7 +318,7 @@ def setings_page():
 
             if key == "next_step_timeout":
                 st.caption(
-                    "Where {time} will be replaced with time in \"HH:MM МСК\" format"
+                    'Where {time} will be replaced with time in "HH:MM МСК" format'
                 )
 
     if "settings_changed" in st.session_state and st.session_state["settings_changed"]:
@@ -365,7 +371,7 @@ def logs_page():
             else:
                 color = "#212529"
             colored_lines.append(
-                f"<span style=\"color: {color}; font-family: monospace;\">{line.rstrip()}</span>"
+                f'<span style="color: {color}; font-family: monospace;">{line.rstrip()}</span>'
             )
         st.markdown(
             "<br>".join(colored_lines) or "_No logs to display_",
@@ -377,11 +383,7 @@ def logs_page():
         log_dir = os.path.dirname(log_file_path) or "."
         log_name = os.path.basename(log_file_path)
         rotated = sorted(
-            [
-                fname
-                for fname in os.listdir(log_dir)
-                if fname.startswith(log_name + ".")
-            ]
+            [fname for fname in os.listdir(log_dir) if fname.startswith(log_name + ".")]
         )
         if rotated:
             st.caption(f"Rotated logs: {', '.join(rotated)}")
