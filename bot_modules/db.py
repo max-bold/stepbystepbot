@@ -1,5 +1,16 @@
-from sqlmodel import SQLModel, Field
+from os import getenv
+
+from dotenv import load_dotenv
 from sqlalchemy import BigInteger
+from sqlmodel import SQLModel, Field, create_engine
+
+load_dotenv()
+
+db_url = getenv("DB_URL")
+
+if db_url is None:
+    raise ValueError("DB_URL environment variable not set")
+engine = create_engine(db_url)
 
 
 class User(SQLModel, table=True):

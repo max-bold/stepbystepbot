@@ -5,7 +5,8 @@ from fastapi import FastAPI
 
 from bot_modules import bot_messages as bms
 from bot_modules.config import script, settings
-from bot_modules.runtime import logger, promo_codes, save_promo_codes
+from bot_modules.logger import logger
+from bot_modules.promo import promo_codes, save_promo_codes
 
 app = FastAPI()
 

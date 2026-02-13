@@ -37,12 +37,13 @@ python bot.py
 ## Структура проекта (после рефакторинга)
 
 - `bot.py` — точка входа и оркестрация сервисов.
-- `bot_modules/runtime.py` — env, logger, engine, dispatcher, promo-коды.
+- `bot_modules/logger.py` — настройка логгера и `logger`.
+- `bot_modules/db.py` — загрузка `.env` для DB, `engine`, SQLModel-модели.
+- `bot_modules/promo.py` — загрузка/сохранение промокодов.
 - `bot_modules/config.py` — `Settings` и `Script`.
 - `bot_modules/handlers.py` — фильтры, FSM-состояния и хендлеры aiogram.
 - `bot_modules/tasks.py` — фоновые задачи и прокси-сессия.
 - `bot_modules/api.py` — FastAPI-ендпоинты для reload/promo.
-- `bot_modules/models.py` — SQLModel-модели.
 - `bot_modules/bot_messages.py` — шаблоны лог-сообщений.
 
 ## Структура `.env`

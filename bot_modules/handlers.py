@@ -20,8 +20,9 @@ from kassa import create_payment
 from aiogram.fsm.state import State, StatesGroup
 
 from bot_modules.config import script, settings
-from bot_modules.models import User
-from bot_modules.runtime import engine, logger, promo_codes, save_promo_codes
+from bot_modules.db import User, engine
+from bot_modules.logger import logger
+from bot_modules.promo import promo_codes, save_promo_codes
 from bot_modules.utils import is_admin_password_valid, now
 
 

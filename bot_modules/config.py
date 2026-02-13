@@ -1,7 +1,7 @@
 from typing import Any, Literal
 import json
 
-from bot_modules.runtime import logger
+from bot_modules.logger import logger
 
 
 class Settings:

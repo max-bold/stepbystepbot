@@ -6,8 +6,17 @@ from sqlmodel import SQLModel
 
 from bot_modules.api import run_reload_api
 from bot_modules.handlers import dp
-from bot_modules.runtime import bot_key, engine, logger, proxy_url
+from os import getenv
+
+from dotenv import load_dotenv
+
+from bot_modules.db import engine
+from bot_modules.logger import logger
 from bot_modules.tasks import SocksAiohttpSession, check_payments, update_next_steps
+
+load_dotenv()
+bot_key = getenv("BOT_KEY")
+proxy_url = getenv("PROXY_URL")
 
 
 async def start_admin_panel() -> asyncio.subprocess.Process | None:

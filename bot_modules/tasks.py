@@ -14,8 +14,8 @@ from bot_modules import bot_messages as bms
 from kassa import get_payment_status
 from bot_modules.config import script, settings
 from bot_modules.handlers import CreatePayment, dp, send_step_content
-from bot_modules.models import User
-from bot_modules.runtime import engine, logger
+from bot_modules.db import User, engine
+from bot_modules.logger import logger
 from bot_modules.utils import now
 
 
